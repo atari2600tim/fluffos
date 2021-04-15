@@ -47,9 +47,9 @@ jobs:
         run: |
           dir
           mkdir lil && mkdir lil/src && mkdir lil/src/www && mkdir lil/testsuite
-          cp bin/driver.exe lil
-          xcopy www lil/src/www /E
-          xcopy ../testsuite lil/testsuite /E
+          cp build/bin/driver.exe lil
+          xcopy build/www lil/src/www /E
+          xcopy testsuite lil/testsuite /E
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v2
         with:
