@@ -46,8 +46,6 @@ jobs:
       - name: 'Prepare Lil Artifact'
         run: |
           dir
-          cd ..
-          dir
           mkdir lil && mkdir lil/src && mkdir lil/src/www && mkdir lil/testsuite
           cp bin/driver.exe lil
           xcopy www lil/src/www /E
