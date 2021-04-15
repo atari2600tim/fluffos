@@ -49,7 +49,7 @@ jobs:
           mkdir lil/src
           cp build/bin/driver.exe lil
           cp -r build/bin/www lil/src
-          cp -r testsuite lil /E
+          cp -r testsuite lil
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v2
         with:
