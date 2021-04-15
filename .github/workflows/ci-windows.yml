@@ -50,6 +50,7 @@ jobs:
           cp build/bin/driver.exe lil
           cp -r build/bin/www lil/src
           cp -r testsuite lil
+          echo "@echo off && echo Game will be on port 4000 or http://localhost:4001 && pause && cd testsuite && ..\driver etc\config.test && echo Game has finished && pause" > startlil.bat
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v2
         with:
