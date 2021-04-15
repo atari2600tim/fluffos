@@ -43,8 +43,16 @@ jobs:
       - name: Testsuite
         run: |
           cd testsuite && ../build/bin/driver etc/config.test -ftest
+      - name: 'Prepare Lil Artifact'
+        run: |
+          dir
+          cd ..
+          mkdir lil && mkdir lil\src && mkdir lil\src\www && mkdir lil\testsuite
+          cp bin\driver.exe lil
+          xcopy www lil\src\www /E
+          xcopy ..\testsuite lil\testsuite /E
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v2
         with:
-          name: fluffos-bin
-          path: build/bin/
+          name: lil
+          path: build/lil/
