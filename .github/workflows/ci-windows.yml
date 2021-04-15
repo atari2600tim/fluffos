@@ -43,3 +43,8 @@ jobs:
       - name: Testsuite
         run: |
           cd testsuite && ../build/bin/driver etc/config.test -ftest
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v2
+        with:
+          name: fluffos-bin
+          path: build/bin/
