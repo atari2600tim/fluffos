@@ -45,11 +45,13 @@ jobs:
           cd testsuite && ../build/bin/driver etc/config.test -ftest
       - name: 'Prepare Lil Artifact'
         run: |
-          dir
-          mkdir lil && mkdir lil/src && mkdir lil/src/www && mkdir lil/testsuite
+          pwd
+          ls -tl
+          mkdir lil
+          mkdir lil/src
           cp build/bin/driver.exe lil
-          xcopy build/www lil/src/www /E
-          xcopy testsuite lil/testsuite /E
+          cp -r build/www lil/src  /E
+          cp -r testsuite lil /E
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v2
         with:
