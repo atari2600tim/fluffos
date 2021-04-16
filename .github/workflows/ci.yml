@@ -37,9 +37,3 @@ jobs:
       run: mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DPACKAGE_DB_SQLITE=2 .. && make -j 2 install && cd ..
     - name: testsuite
       run: cd testsuite && ../build/bin/driver etc/config.test -ftest
-
-    - name: 'Upload Artifact'
-      uses: actions/upload-artifact@v2
-      with:
-        name: fluffos-bin
-        path: build/bin/
