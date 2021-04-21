@@ -104,8 +104,9 @@ void vm_start() {
     pop_context(&econ);
     exit(-1);
   }
-  debug_message("TIM: loaded the simul_efun and master"):
+  debug_message("TIM: loaded the simul_efun and master, about to pop_context"):
   pop_context(&econ);
+  debug_message("TIM: did the pop_context"):
 
   // TODO: move this to correct location.
 #ifdef PACKAGE_MUDLIB_STATS
