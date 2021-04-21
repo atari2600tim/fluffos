@@ -2,8 +2,6 @@ name: CI on Windows
 
 on:
   push:
-    branches:
-      - *
     paths-ignore:
       - 'docs/**'
   pull_request:
