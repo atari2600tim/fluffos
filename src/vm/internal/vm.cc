@@ -95,7 +95,9 @@ void vm_start() {
     debug_message("Loading simul_efun file : %s\n", CONFIG_STR(__SIMUL_EFUN_FILE__));
     init_simul_efun(CONFIG_STR(__SIMUL_EFUN_FILE__));
     debug_message("Loading master file: %s\n", CONFIG_STR(__MASTER_FILE__));
+    debug_message("TIM: about to load master file");
     init_master(CONFIG_STR(__MASTER_FILE__));
+    debug_message("TIM: loaded master file, still inside the try statement");
   } catch (const char *) {
     debug_message("The simul_efun (%s) and master (%s) objects must be loadable.\n",
                   CONFIG_STR(__SIMUL_EFUN_FILE__), CONFIG_STR(__MASTER_FILE__));
