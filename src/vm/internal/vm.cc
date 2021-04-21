@@ -104,20 +104,20 @@ void vm_start() {
     pop_context(&econ);
     exit(-1);
   }
-  debug_message("TIM: loaded the simul_efun and master, about to pop_context"):
+  debug_message("TIM: loaded the simul_efun and master, about to pop_context");
   pop_context(&econ);
-  debug_message("TIM: did the pop_context"):
+  debug_message("TIM: did the pop_context");
 
   // TODO: move this to correct location.
 #ifdef PACKAGE_MUDLIB_STATS
-  debug_message("TIM: about to restore_stat_files"):
+  debug_message("TIM: about to restore_stat_files");
   restore_stat_files();
-  debug_message("TIM: just ran restore_stat_files"):
+  debug_message("TIM: just ran restore_stat_files");
 #endif
 
-  debug_message("TIM: about to preload_objects"):
+  debug_message("TIM: about to preload_objects");
   preload_objects();
-  debug_message("TIM: ran preload_objects"):
+  debug_message("TIM: ran preload_objects");
 }
 
 /*
