@@ -58,7 +58,7 @@ static void check_svalue(svalue_t *v) {
           }
         }
         free_object(&v->u.fp->hdr.owner, "reclaim_objects");
-        v->u.fp->hdr.owner = 0;
+        v->u.fp->hdr.owner = nullptr;
         cleaned++;
       }
 
@@ -87,7 +87,7 @@ static void gc_mapping(mapping_t *m) {
       if (elt->values[0].type == T_OBJECT) {
         if (elt->values[0].u.ob->flags & O_DESTRUCTED) {
           free_object(&elt->values[0].u.ob, "gc_mapping");
-          elt->values[0].u.ob = 0;
+          elt->values[0].u.ob = nullptr;
           /* found one, do a map_delete() */
           if (!(*prev = elt->next) && !m->table[j]) {
             m->unfilled++;
@@ -112,7 +112,7 @@ static void gc_mapping(mapping_t *m) {
 int reclaim_objects(bool is_auto) {
   if (is_auto) {
     add_gametick_event(std::chrono::seconds(30 + random_number(30)),
-                       tick_event::callback_type(std::bind(reclaim_objects, true)));
+                       tick_event::callback_type([] { return reclaim_objects(true); }));
   }
   int i;
   object_t *ob;

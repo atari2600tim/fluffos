@@ -1,4 +1,4 @@
-// mudlib:   Lil 
+// mudlib:   Lil
 // file:     user.c
 // purpose:  is the representation of an interactive (user) in the MUD
 
@@ -229,4 +229,41 @@ reconnect()
     tell_room(environment(), "Reconnected.\n");
     tell_room(environment(), query_name() + " has reconnected.\n");
 #endif
+}
+
+void window_size(int width, int height) {
+  string msg = sprintf("TELNET NAWS: %dx%d\n", width, height);
+  receive(msg);
+}
+
+// receive_environ
+void receive_environ(string var, string value) {
+  string msg = sprintf("TELNET ENV received: %s=%s\n", var, value);
+  receive(msg);
+}
+
+void mxp_enable() {
+  receive("<MXP negotiation: enabled.>\n");
+}
+
+void gmcp_enable() {
+  receive("<GMCP negotiation: enabled.>\n");
+}
+
+void gmcp(string req) {
+  receive("<GMCP request received.>\n");
+  receive(req);
+  receive("\n<GMCP request end.>\n");
+}
+
+void mxp_tag(string command) {
+  receive("<MXP TAG: " + command + ".>\n");
+}
+
+void act_mxp() {
+  efun::act_mxp();
+}
+
+void send_gmcp(string req) {
+  efun::send_gmcp(req);
 }

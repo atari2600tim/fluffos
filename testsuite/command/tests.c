@@ -25,6 +25,7 @@ void recurse(string dir) {
         }
 #endif
       }
+      cp("/log/compile", "/log/compile_fail");
       rm("/log/compile");
     }
     // only make sure crasher don't crash, errors are ignored.
@@ -75,6 +76,10 @@ int execute(string fun)
     error("LEAK\n");
   }
 #endif
+  if("/single/master"->get_inherit_called() == 0) {
+    error("MASTER valid inherit functions are not being called!");
+  }
+
   return 1;
 }
 

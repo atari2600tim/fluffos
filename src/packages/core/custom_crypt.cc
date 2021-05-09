@@ -45,12 +45,6 @@
 
 #include "packages/core/custom_crypt.h"
 
-#ifdef CUSTOM_CRYPT
-
-#ifndef min
-#define min(a, b) ((a) < (b) ? (a) : (b))
-#endif
-
 /* Can we cheat and just use network byte order (and htonl/ntohl) here?
  * -Beek
  */
@@ -79,6 +73,7 @@
 /* Left rotation. */
 #define RLEFT(a, n) (a) = (((a) << (n)) | ((a) >> (32 - (n))))
 
+namespace {
 /* Table T constructed from a sine function, mentioned in RFC, section 3.4.
  * Table T[i], 1 <= i <= 64,    = trunc (4294967296 * |sin i|).
  */
@@ -95,9 +90,9 @@ uint32_t T[64] = {
 /* This function returns success, i.e. 0 on error. */
 int MD5Digest(BytE *buf,            /* Buffer to be digested.               */
               unsigned long buflen, /* Length of the buffer in bytes.
-*/
+                                     */
               BytE *Digest          /* Output area: 16 raw bytes.           */
-              ) {
+) {
 #define OA 0x67452301 /* Per RFC, section 3.3. */
 #define OB 0xefcdab89
 #define OC 0x98badcfe
@@ -321,7 +316,7 @@ void crunchbuffer(BytE *buf,      /* Buffer to be crunched.       */
                   char *addition, /* What to add to buf.          */
                   int addlen,     /* Length of addition.          */
                   int maxlen      /* How many bytes in buf.       */
-                  ) {
+) {
   int used;
 
   used = *len;
@@ -338,7 +333,7 @@ void crunchbuffer(BytE *buf,      /* Buffer to be crunched.       */
     }
 
     /* Work out how many bytes we can add to `buf', and do it. */
-    crunched = min((maxlen - used), addlen);
+    crunched = std::min((maxlen - used), addlen);
     memcpy(&(buf[used]), addition, crunched);
 
     /* Update counters and pointers. */
@@ -351,6 +346,7 @@ void crunchbuffer(BytE *buf,      /* Buffer to be crunched.       */
 
   return;
 }
+}  // namespace
 
 /* Return hash of buffer `key' using salt `salt', which
  * must both be null-terminated strings if given.
@@ -371,8 +367,8 @@ char *custom_crypt(const char *key, const char *salt, unsigned char *rawout) {
   static BytE buffer[MD5_MAXLEN], abuffer[MD5_MAXLEN], thesalt[MD5_SALTLEN];
   int used = 0, len, i;
   static BytE /* encode()d salt, encode()d digest, salt seperator
-                     * and null terminating byte:
-                     */
+               * and null terminating byte:
+               */
       ret[(MD5_SALTLEN * 2) + 1 + (sizeof(Digest) * 2) + 1];
 
   /* Obtain the salt we have to use (either given in salt
@@ -414,7 +410,7 @@ char *custom_crypt(const char *key, const char *salt, unsigned char *rawout) {
   len = strlen(key);
   for (i = 3000 + (11 * len); i > 0; i--) {
     if (!MD5Digest(abuffer, sizeof(abuffer), Digest)) {
-      return NULL;
+      return nullptr;
     }
     memcpy(&(abuffer[(i + len) % (MD5_MAXLEN - sizeof(Digest))]), Digest, sizeof(Digest));
   }
@@ -423,7 +419,7 @@ char *custom_crypt(const char *key, const char *salt, unsigned char *rawout) {
 
   /* Use this generated buffer to do the actual digesting. */
   if (!MD5Digest(buffer, sizeof(buffer), Digest)) {
-    return NULL;
+    return nullptr;
   }
 
   /* Pyre! */
@@ -442,4 +438,3 @@ char *custom_crypt(const char *key, const char *salt, unsigned char *rawout) {
 
   return reinterpret_cast<char *>(ret);
 }
-#endif

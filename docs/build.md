@@ -3,157 +3,113 @@ layout: default
 title: Build
 ---
 
-## Environment
+## Supported Environment
 
-It is highly recommend to use the latest ubuntu LTS version (current 18.04 LTS), 
+v2019 supports building on ubuntu 18.04+ (including WSL), and OSX latest, Windows on MSYS2/mingw64.
 
-v2017 currently supports ubuntu 14.04+, centos 7+, CYGWIN 64. BSD & OSX still has issues.
+Compilers: FluffOS v2019 uses C++17 and C11, which requires at least GCC 7+ or LLVM clang 4+.
 
-v2019 will support ubuntu 16.04+, CYGWIN, Win10+WSL, native windows using VS2017, and OSX/BSD.
+System Library Requirement (Must install):
+1. Libevent 2.0+.
+1. ICU: FluffOS uses ICU for UTF-8 and transcoding support.
+1. jemalloc: Release build use JEMALLOC by default, and is highly recommended in production.
+1. OpenSSL (if PACAKGE_CRYPTO enabled)
+1. PCRE (if PACKGAGE_PCRE enabled)
+1. MysqlClient (if PACKAGE_DB enabled)
 
-Compilers: FluffOS uses C++11, which requires at least GCC 4.6+ or LLVM clang 3.0+.
+Bundled thirdparty library (no need to install):
+1. libtelnet: telnet protocol support
+1. libwebsocket: websocket support.
+1. ghc filesystem: polyfill for std::filesystem
+1. backward-cpp: stacktrace
+1. utf8_decoder_dfa: fast utf8 validation.
+1. widecharwidth: wcwidth with unicode 11
 
-Library: libevent 2.0+, additional libraries depends on the package selection. 
+## Ubuntu 18.04 LTS
 
-jemalloc: use JEMALLOC is highly recommended in production. otherwise you may run into memory issue.
+This is the best linux distro to build & run FluffOS, support for other distro is best effort only.
 
-## BUILD (v2019)
+Installing Dependencies
 
-Ubuntu 16.04+
+```bash
+# Install all libs
+$ sudo apt update
+$ sudo apt install build-essential bison libevent-dev libmysqlclient-dev libpcre3-dev libpq-dev \
+libsqlite3-dev libssl-dev libz-dev libjemalloc-dev libicu-dev
+```
 
-This is the best platform to build & run FluffOS, support for other platform
-is best effort only.
+Build Steps
 
-    # Install all libs
-    $ sudo apt update
-    $ sudo apt install build-essential bison libevent-dev libjemalloc-dev \
-    libmysqlclient-dev libpcre3-dev libpq-dev libsqlite3-dev libssl-dev libz-dev libgtest-dev
+- checkout git repo
+```shell
+$ git clone https://github.com/fluffos/fluffos.git
+$ cd fluffos
+$ git checkout master #(or an release tag)
+```
+- Upgrade your cmake
+```shell
+$ sudo pip install --upgrade cmake
+```
+- Build
+```shell
+$ mkdir build
+$ cd build
+$ cmake ..
+$ make -j4 install
+```
 
-To Build fluffOS v2019 (CMake & out of tree build)
+- Find binary files and support files in ./bin/
 
-    # 1. checkout git repo
-    $ git clone https://github.com/fluffos/fluffos.git
-    $ cd fluffos
-    $ git checkout v2019 (or any specfic release tag)
+## MacOS
 
-    # 2. Upgrade your cmake
-    $ sudo pip install --upgrade cmake
+Require OSX 10.15.
 
-    # 3. build
-    $ mkdir build && cd build
-    $ cmake ..
-    $ make
-    $ cd ..
+1. Install Homebrew, goto <https://brew.sh/> and follow instructions!
 
-    # 4. find the built binary in build/src/driver and build/src/portbind
+2. install libraries (checkout <https://github.com/fluffos/fluffos/blob/master/.github/workflows/ci-osx.yml> if you
+ have issue)
+```shell
+$ brew install cmake pkg-config mysql pcre libgcrypt libevent openssl jemalloc icu4c
+```
 
-Packages
+3. build same as under linux, you will need to pass two environment variables
+```shell
+$ mkdir build && cd build
+$ OPENSSL_ROOT_DIR="/usr/local/opt/openssl" ICU_ROOT="/usr/local/opt/icu4c" cmake ..
+$ make install
+```
 
-    # By default driver have an default list of builtin packages to build.
-    # Please checkout src/packages/XXX/CMakeLists.txt.
+## Windows
 
-    # To turn off an PAKCAGE in compile time
+Supported Environment: Windows 10 + MSYS2, the binary produced can run on Windows 7+.
 
-    $ cmake -DPACKAGE_DB=OFF ..
+see <https://forum.fluffos.info/t/compiling-fluffos-v2019-under-osx-windows-msys2-mingw64/601>
 
-    # Make sure you clear build directory first.
+checkout <https://github.com/fluffos/fluffos/blob/master/.github/workflows/ci-windows.yml> if you have issue.
 
-Advanced Build features (v2019)
+## Packages
 
-    # By default driver will link dynamic libraries and optimize for running on current CPU only.
-    # if you wish to cross compile for other machines, turn off MARCH_NATIVE and turn
-    # on STATIC.
+By default driver have an default list of builtin packages to build.
 
-    $ cmake -DMARCH_NATIVE=OFF -DSTATIC=ON ..
+If you want to turn off an package, run `cmake .. -DPACKAGE_XX=OFF -DPACAGE_YY=OFF`
 
-    # Check the result file to make sure it is an static file
+## CPU compatibility
 
-    $ ldd src/driver
+By default driver built in release mode will optimize for running on current system CPU only. Copying driver to
+another machine to run will generally not work!
+
+if you need portable drivers, turn off MARCH_NATIVE as following.
+
+```shell
+$ cmake .. -DMARCH_NATIVE=OFF
+```
+
+## Static linking
+
+you can pass -DSTATIC=ON to force driver to link staticly for all libraries, this will only work in a specialized
+ environment like alpine linux and Windows. Check the result file to make sure it is an static file.
+
+```shell
+$ ldd bin/driver
     not a dynamic executable
-
-## BUILD (v2017)
-
-To Build fluffOS v2017 (Autoconf & in tree build)
-
-    # 0. You need to install autoconf & automake!
-    $ sudo apt install autoconf automake
-   
-    # 1. checkout git repo
-    $ git clone https://github.com/fluffos/fluffos.git
-    $ cd fluffos
-    $ git checkout v2017 (or any specfic release tag)
-
-    # 2. modify local_options file as need.
-    $ cd src
-    <edit local_options to you need>
-
-    # 3. Build!
-    $ ./build.FluffOS
-    $ make
-
-    # 4. find the built binary in src/driver and src/portbind
-
-## CentOS
-
-The problem with CentOS is that most of the package is too old for FluffOS,
-you must upgrade them manually first.
-
-Move to ubuntu or run an ubuntu based docker images is highly recommended.
-
-    # Install GCC 4.8 (or the latest one you like!)
-
-    $ wget http://ftp.gnu.org/gnu/gcc/gcc-4.8.0/gcc-4.8.0.tar.bz2
-    $ tar -jxvf  gcc-4.8.0.tar.bz2
-    $ cd gcc-4.8.0
-    $ ./contrib/download_prerequisites
-
-    # Build GCC
-    $ cd ..
-    $ mkdir gcc-build-4.8.0
-    $ cd gcc-build-4.8.0
-    $ ../gcc-4.8.0/configure --enable-checking=release --enable-languages=c,c++ --disable-multilib
-    $ make -j16 # (Will take an hour)
-    $ make install
-
-    # Verify now gcc is installed correctly.
-    # "gcc -v" should output "gcc (GCC) 4.8.0"
-
-    # NOTE:Manually install new version of libstdc++
-    # you have to copy libstdc++.so.6 in your gcc4.8 build directory to /usr/lib64
-    # override the existing file.
-
-    # Install libevent2.0 manually
-
-    $ wget https://github.com/downloads/libevent/libevent/libevent-2.0.21-stable.tar.gz
-    $ tar zxvf libevent-2.0.21-stable.tar.gz
-    $ cd libevent-2.0.21-stable
-    $ ./configure –prefix=/usr
-    $ make
-    $ make install
- 
-## CYGWIN32/CYGWIN64 (v2017 & V2019)
-
-FluffOS v2017 is fully functional under CYGWIN32 and CYGWIN64.
-
-    # 1. Get CYGWIN setup file on http://www.cygwin.org , preferably x64 one.
-
-    # 2. Make sure to install following packages, using apt-cyg
-         (https://github.com/transcode-open/apt-cyg) is highly recommended. 
-
-      - autoconf
-      - automake
-      - binutils (make sure to choose 2.28-3, there are still crashing bugs for latest version)
-      - bison
-      - gcc-core
-      - gcc-g++
-      - git
-      - libcrypt-devel
-      - libevent-devel
-      - libiconv-devel
-      - libpcre-devel
-      - zlib-devel
-      - libmysqlclient-devel
-
-    # CYGWIN setup should take care of other dependencies for you
-
-    # 3. Build FluffOS as if we are under normal linux!
+```

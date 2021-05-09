@@ -8,19 +8,31 @@
 #include <stdarg.h>    // for va_start
 #include <unistd.h>    // for open()
 #ifdef HAVE_SIGNAL_H
-#include <signal.h>    // for signal*
+#include <signal.h>  // for signal*
+#include <net/telnet.h>
+#endif
+#ifdef _WIN32
+#include <winsock.h>  // for WSACleanup()
 #endif
 
-#include "backend.h"  // for clear_tick_events , FIXME
-#include "user.h"     // for users_foreach, FIXME
-#include "vm/internal/otable.h"
+#include "base/internal/tracing.h"
+
+#include "applies_table.autogen.h"
+#include "backend.h"      // for clear_tick_events , FIXME
+#include "user.h"         // for users_foreach, FIXME
+#include "interactive.h"  // for interactive_t, FIXME
+#include "vm/internal/apply.h"
 #include "vm/internal/base/machine.h"
-#include "vm/internal/compiler/lex.h"  // for total_lines, FIXME
+#include "vm/internal/master.h"
+#include "vm/internal/otable.h"
+#include "vm/internal/simul_efun.h"
+#include "compiler/internal/lex.h"  // for total_lines, FIXME
 
 #include "packages/core/add_action.h"
 #include "packages/core/call_out.h"
 #include "packages/core/ed.h"
 #include "packages/core/file.h"
+#include "packages/core/heartbeat.h"
 #ifdef PACKAGE_ASYNC
 #include "packages/async/async.h"
 #endif
@@ -37,16 +49,9 @@ void db_cleanup(void);  // FIXME
 #include "packages/parser/parser.h"
 #endif
 
-#ifdef DTRACE
-#include <sys/sdt.h>
-#else
-#define DTRACE_PROBE1(x, y, z)
-#endif
-
 #include "comm.h"  // FIXME
 
-#include "vm/internal/trace.h" // for dump_trace && get_svalue_trace
-
+#include "vm/internal/trace.h"  // for dump_trace && get_svalue_trace
 /*
  * This one is called from HUP.
  */
@@ -60,8 +65,6 @@ void startshutdownMudOS(int sig) { MudOS_is_being_shut_down = 1; }
  * in an interrupt.
  */
 void shutdownMudOS(int exit_code) {
-  int i;
-
   shout_string("FluffOS driver shouts: shutting down immediately.\n");
 
 #ifdef PACKAGE_MUDLIB_STATS
@@ -89,6 +92,12 @@ void shutdownMudOS(int exit_code) {
 #ifdef PROFILING
   monitor(0, 0, 0, 0, 0); /* cause gmon.out to be written */
 #endif
+  Tracer::collect();
+
+#ifdef _WIN32
+  WSACleanup();
+#endif
+
   exit(exit_code);
 }
 
@@ -135,7 +144,7 @@ static void init_privs_for_object(object_t *ob) {
 #ifdef PACKAGE_UIDS
       || !current_object->uid
 #endif
-      ) {
+  ) {
     ob->privs = NULL;
     return;
   }
@@ -267,14 +276,14 @@ static object_t *load_virtual_object(const char *name, int clone) {
   int argc = 2;
   char *new_name;
   object_t *new_ob, *ob;
-  array_t *args = 0;
+  array_t *args = nullptr;
   svalue_t *v;
 
   if (!master_ob) {
     if (clone) {
       pop_n_elems(clone - 1);
     }
-    return 0;
+    return nullptr;
   }
 
   if (clone > 1) {
@@ -292,7 +301,7 @@ static object_t *load_virtual_object(const char *name, int clone) {
   }
   v = apply_master_ob(APPLY_COMPILE_OBJECT, argc);
   if (!v || (v->type != T_OBJECT)) {
-    return 0;
+    return nullptr;
   }
   new_ob = v->u.ob;
 
@@ -304,7 +313,7 @@ static object_t *load_virtual_object(const char *name, int clone) {
        * allow this.  Destruct the new object and raise an error.
        */
       destruct_object(new_ob);
-      error("Virtual object name duplicates an existing object name.\n");
+      error("Virtual object name duplicates an existing object name: '%s'.\n", name);
     }
     /* Make sure O_CLONE is NOT set */
     new_ob->flags &= ~O_CLONE;
@@ -326,7 +335,7 @@ static object_t *load_virtual_object(const char *name, int clone) {
     FREE((char *)new_ob->obname);
   }
   SETOBNAME(new_ob, new_name);
-  ObjectTable::instance().insert(new_ob->obname,new_ob);
+  ObjectTable::instance().insert(new_ob->obname, new_ob);
 
   /* finish initialization */
   new_ob->flags |= O_VIRTUAL;
@@ -345,6 +354,7 @@ static object_t *load_virtual_object(const char *name, int clone) {
   /* reassign uid */
   give_uid_to_object(new_ob);
 #endif
+  apply(APPLY_VIRTUAL_START, new_ob, 0, ORIGIN_DRIVER);
   return new_ob;
 }
 
@@ -406,6 +416,8 @@ int filename_to_obname(const char *src, char *dest, int size) {
  *
  */
 object_t *load_object(const char *lname, int callcreate) {
+  ScopedTracer _tracer("LPC Load Object", EventCategory::VM_LOAD_OBJECT, json{lname});
+
   auto inherit_chain_size = CONFIG_INT(__INHERIT_CHAIN_SIZE__);
 
   int f;
@@ -413,7 +425,7 @@ object_t *load_object(const char *lname, int callcreate) {
   object_t *ob;
   svalue_t *mret;
   struct stat c_st;
-  char real_name[400], name[400], actualname[400], obname[400];
+  char name[400], actualname[400], real_name[sizeof(name)+2], obname[sizeof(real_name)];
 
   const char *pname = check_valid_path(lname, master_ob, "load_object", 0);
   if (!pname) {
@@ -423,7 +435,7 @@ object_t *load_object(const char *lname, int callcreate) {
     error("Inherit chain too deep: > %d when trying to load '%s'.\n", inherit_chain_size, lname);
   }
 #ifdef PACKAGE_UIDS
-  if (current_object && current_object->euid == NULL) {
+  if (current_object && current_object->euid == nullptr) {
     error("Can't load objects when no effective user.\n");
   }
 #endif
@@ -462,6 +474,10 @@ object_t *load_object(const char *lname, int callcreate) {
   }
 
   f = open(real_name, O_RDONLY);
+#ifdef _WIN32
+  // TODO: change everything to use fopen instead.
+  _setmode(f, _O_BINARY);
+#endif
   if (f == -1) {
     debug_perror("compile_file", real_name);
     error("Could not read the file '/%s'.\n", real_name);
@@ -474,8 +490,8 @@ object_t *load_object(const char *lname, int callcreate) {
   close(f);
 
   /* Sorry, can't handle objects without programs yet. */
-  if (inherit_file == 0 && (num_parse_error > 0 || prog == 0)) {
-    if (num_parse_error == 0 && prog == 0) {
+  if (inherit_file == nullptr && (num_parse_error > 0 || prog == nullptr)) {
+    if (num_parse_error == 0 && prog == nullptr) {
       error("No program in object '/%s'!\n", name);
     }
 
@@ -498,11 +514,11 @@ object_t *load_object(const char *lname, int callcreate) {
       strcpy(inhbuf, inherit_file);
     }
     FREE(inherit_file);
-    inherit_file = 0;
+    inherit_file = nullptr;
 
     if (prog) {
       free_prog(&prog);
-      prog = 0;
+      prog = nullptr;
     }
     if (strcmp(inhbuf, name) == 0) {
       error("Illegal to inherit self.\n");
@@ -528,7 +544,7 @@ object_t *load_object(const char *lname, int callcreate) {
       /* sigh, loading the inherited file removed us */
       if (!ob) {
         num_objects_this_thread--;
-        return 0;
+        return nullptr;
       }
       ob->load_time = get_current_time();
     }
@@ -542,12 +558,12 @@ object_t *load_object(const char *lname, int callcreate) {
   ob->prog = prog;
   ob->flags |= O_WILL_RESET; /* must be before reset is first called */
   ob->next_all = obj_list;
-  ob->prev_all = 0;
+  ob->prev_all = nullptr;
   if (obj_list) {
     obj_list->prev_all = ob;
   }
   obj_list = ob;
-  ObjectTable::instance().insert(ob->obname,ob); /* add name to fast object lookup table */
+  ObjectTable::instance().insert(ob->obname, ob); /* add name to fast object lookup table */
   save_command_giver(command_giver);
   push_object(ob);
   mret = apply_master_ob(APPLY_VALID_OBJECT, 1);
@@ -566,7 +582,7 @@ object_t *load_object(const char *lname, int callcreate) {
   restore_command_giver();
 
   if (ob) {
-    debug(d_flag, "--/%s loaded", ob->obname);
+    debug(d_flag, "--/%s loaded.\n", ob->obname);
   }
 
   ob->load_time = get_current_time();
@@ -592,7 +608,7 @@ object_t *clone_object(const char *str1, int num_arg) {
   object_t *ob, *new_ob;
 
 #ifdef PACKAGE_UIDS
-  if (current_object && current_object->euid == 0) {
+  if (current_object && current_object->euid == nullptr) {
     error("Object must call seteuid() prior to calling clone_object().\n");
   }
 #endif
@@ -602,15 +618,15 @@ object_t *clone_object(const char *str1, int num_arg) {
   num_objects_this_thread = 0;
   ob = find_object(str1);
   if (ob && !object_visible(ob)) {
-    ob = 0;
+    ob = nullptr;
   }
   /*
    * If the object self-destructed...
    */
-  if (ob == 0) { /* fix from 3.1.1 */
+  if (ob == nullptr) { /* fix from 3.1.1 */
     restore_command_giver();
     pop_n_elems(num_arg);
-    return (0);
+    return (nullptr);
   }
 
   if (ob->flags & O_CLONE) {
@@ -641,7 +657,7 @@ object_t *clone_object(const char *str1, int num_arg) {
 
   new_ob->next_all = obj_list;
   obj_list->prev_all = new_ob;
-  new_ob->prev_all = 0;
+  new_ob->prev_all = nullptr;
   obj_list = new_ob;
   ObjectTable::instance().insert(new_ob->obname, new_ob); /* Add name to fast object lookup table */
   init_object(new_ob);
@@ -650,7 +666,7 @@ object_t *clone_object(const char *str1, int num_arg) {
   restore_command_giver();
   /* Never know what can happen ! :-( */
   if (new_ob->flags & O_DESTRUCTED) {
-    return (0);
+    return (nullptr);
   }
   return (new_ob);
 }
@@ -662,8 +678,8 @@ object_t *environment(svalue_t *arg) {
   if (arg && arg->type == T_OBJECT) {
     ob = arg->u.ob;
   }
-  if (ob == 0 || ob->super == 0 || (ob->flags & O_DESTRUCTED)) {
-    return 0;
+  if (ob == nullptr || ob->super == nullptr || (ob->flags & O_DESTRUCTED)) {
+    return nullptr;
   }
   if (ob->flags & O_DESTRUCTED) {
     error("environment() of destructed object.\n");
@@ -687,46 +703,46 @@ object_t *object_present(svalue_t *v, object_t *ob) {
   object_t *ret_ob;
   int specific = 0;
 
-  if (ob == 0) {
+  if (ob == nullptr) {
     ob = current_object;
   } else {
     specific = 1;
   }
   if (ob->flags & O_DESTRUCTED) {
-    return 0;
+    return nullptr;
   }
   if (v->type == T_OBJECT) {
     if (specific) {
       if (v->u.ob->super == ob) {
         return v->u.ob;
       } else {
-        return 0;
+        return nullptr;
       }
     }
-    if (v->u.ob->super == ob || (v->u.ob->super == ob->super && ob->super != 0)) {
+    if (v->u.ob->super == ob || (v->u.ob->super == ob->super && ob->super != nullptr)) {
       return v->u.ob->super;
     }
-    return 0;
+    return nullptr;
   }
   ret_ob = object_present2(v->u.string, ob->contains);
   if (ret_ob) {
     return ret_ob;
   }
   if (specific) {
-    return 0;
+    return nullptr;
   }
   if (ob->super) {
     push_svalue(v);
     ret = apply(APPLY_ID, ob->super, 1, ORIGIN_DRIVER);
     if (ob->super->flags & O_DESTRUCTED) {
-      return 0;
+      return nullptr;
     }
     if (!IS_ZERO(ret)) {
       return ob->super;
     }
     return object_present2(v->u.string, ob->super->contains);
   }
-  return 0;
+  return nullptr;
 }
 // If string doesn't end with number, then Look for a object that
 // id(str) returns true, return that object.
@@ -735,11 +751,11 @@ object_t *object_present(svalue_t *v, object_t *ob) {
 static object_t *object_present2(const char *str, object_t *ob) {
   svalue_t *ret;
 
-  const char *name = NULL;
+  const char *name = nullptr;
   int namelen = 0, count = 0;
 
   if (str[0] == '\0') {
-    return NULL;
+    return nullptr;
   }
 
   // default case
@@ -749,7 +765,7 @@ static object_t *object_present2(const char *str, object_t *ob) {
   // If string ends with number, try to separate name and count.
   if (uisdigit(name[namelen - 1])) {
     const char *ptr = strrchr(name, ' ');
-    if (ptr != NULL) {
+    if (ptr != nullptr) {
       // Make sure second part has only digits
       if (strspn(ptr + 1, "1234567890") == strlen(ptr + 1)) {
         namelen = ptr - name;
@@ -766,7 +782,7 @@ static object_t *object_present2(const char *str, object_t *ob) {
 
     ret = apply(APPLY_ID, ob, 1, ORIGIN_DRIVER);
     if (ob->flags & O_DESTRUCTED) {
-      return 0;
+      return nullptr;
     }
     if (IS_ZERO(ret)) {
       continue;
@@ -776,7 +792,7 @@ static object_t *object_present2(const char *str, object_t *ob) {
     }
     return ob;
   }
-  return 0;
+  return nullptr;
 }
 #endif
 
@@ -816,7 +832,7 @@ void destruct_object(object_t *ob) {
 #ifdef PACKAGE_PARSER
   if (ob->pinfo) {
     parse_free(ob->pinfo);
-    ob->pinfo = 0;
+    ob->pinfo = nullptr;
   }
 #endif
 
@@ -847,9 +863,9 @@ void destruct_object(object_t *ob) {
       otmp = ob2;
       ob2 = ob2->shadowing;
       if (ob2) {
-        ob2->shadowed = 0;
+        ob2->shadowed = nullptr;
       }
-      otmp->shadowing = 0;
+      otmp->shadowing = nullptr;
       destruct_object(otmp);
     }
     return;
@@ -864,8 +880,8 @@ void destruct_object(object_t *ob) {
   if (ob->shadowed) {
     ob->shadowed->shadowing = ob->shadowing;
   }
-  ob->shadowing = 0;
-  ob->shadowed = 0;
+  ob->shadowing = nullptr;
+  ob->shadowed = nullptr;
 #endif
 
   debug(d_flag, "Deobject_t /%s (ref %d)", ob->obname, ob->ref);
@@ -912,10 +928,9 @@ void destruct_object(object_t *ob) {
 #endif
 #ifndef NO_SNOOP
   if (ob->flags & O_SNOOP) {
-    int i;
     users_foreach([ob](interactive_t *user) {
       if (user->snooped_by == ob) {
-        user->snooped_by = 0;
+        user->snooped_by = nullptr;
       }
     });
     ob->flags &= ~O_SNOOP;
@@ -1006,7 +1021,7 @@ void destruct_object(object_t *ob) {
     }
   } else {
     obj_list = ob->next_all;
-    obj_list->prev_all = 0;
+    obj_list->prev_all = nullptr;
   }
   /*
    for (pp = &obj_list; *pp; pp = &(*pp)->next_all) {
@@ -1020,15 +1035,15 @@ void destruct_object(object_t *ob) {
 
   remove_living_name(ob);
 #ifndef NO_ENVIRONMENT
-  ob->super = 0;
-  ob->next_inv = 0;
-  ob->contains = 0;
+  ob->super = nullptr;
+  ob->next_inv = nullptr;
+  ob->contains = nullptr;
 #endif
   ob->next_all = obj_list_destruct;
   if (obj_list_destruct) {
     obj_list_destruct->prev_all = ob;
   }
-  ob->prev_all = 0;
+  ob->prev_all = nullptr;
   obj_list_destruct = ob;
   set_heart_beat(ob, 0);
   ob->flags |= O_DESTRUCTED;
@@ -1040,6 +1055,16 @@ void destruct_object(object_t *ob) {
   if (ob->flags & O_HIDDEN) {
     num_hidden--;
   }
+#endif
+
+#ifdef DEBUG
+  tot_dangling_object++;
+  ob->next_all = obj_list_dangling;
+  if (obj_list_dangling) {
+    obj_list_dangling->prev_all = ob;
+  }
+  obj_list_dangling = ob;
+  ob->prev_all = 0;
 #endif
 }
 
@@ -1090,17 +1115,7 @@ void destruct2(object_t *ob) {
     free_sentence(s);
     s = next;
   }
-  ob->sent = 0;
-#endif
-
-#ifdef DEBUG
-  tot_dangling_object++;
-  ob->next_all = obj_list_dangling;
-  if (obj_list_dangling) {
-    obj_list_dangling->prev_all = ob;
-  }
-  obj_list_dangling = ob;
-  ob->prev_all = 0;
+  ob->sent = nullptr;
 #endif
 
   free_object(&ob, "destruct_object");
@@ -1267,7 +1282,7 @@ void shout_string(const char *str) {
 #ifndef NO_ENVIRONMENT
         || !ob->super
 #endif
-        ) {
+    ) {
       continue;
     }
     tell_object(ob, str, strlen(str));
@@ -1295,12 +1310,12 @@ int input_to(svalue_t *fun, int flag, int num_arg, svalue_t *args) {
      */
     if (num_arg) {
       i = num_arg * sizeof(svalue_t);
-      if ((x = reinterpret_cast<svalue_t *>(DMALLOC(i, TAG_INPUT_TO, "input_to: 1"))) == NULL) {
+      if ((x = reinterpret_cast<svalue_t *>(DMALLOC(i, TAG_INPUT_TO, "input_to: 1"))) == nullptr) {
         fatal("Out of memory!\n");
       }
       memcpy(x, args, i);
     } else {
-      x = NULL;
+      x = nullptr;
     }
 
     command_giver->interactive->carryover = x;
@@ -1315,6 +1330,7 @@ int input_to(svalue_t *fun, int flag, int num_arg, svalue_t *args) {
     }
     s->ob = current_object;
     add_ref(current_object, "input_to");
+
     return 1;
   }
   free_sentence(s);
@@ -1343,12 +1359,12 @@ int get_char(svalue_t *fun, int flag, int num_arg, svalue_t *args) {
      */
     if (num_arg) {
       i = num_arg * sizeof(svalue_t);
-      if ((x = reinterpret_cast<svalue_t *>(DMALLOC(i, TAG_TEMPORARY, "get_char: 1"))) == NULL) {
+      if ((x = reinterpret_cast<svalue_t *>(DMALLOC(i, TAG_TEMPORARY, "get_char: 1"))) == nullptr) {
         fatal("Out of memory!\n");
       }
       memcpy(x, args, i);
     } else {
-      x = NULL;
+      x = nullptr;
     }
 
     command_giver->interactive->carryover = x;
@@ -1374,7 +1390,7 @@ void print_svalue(svalue_t *arg) {
   char tbuf[LARGEST_PRINTABLE_STRING + 1];
   int len;
 
-  if (arg == 0) {
+  if (arg == nullptr) {
     tell_object(command_giver, "<NULL>", 6);
   } else {
     switch (arg->type) {
@@ -1407,11 +1423,9 @@ void print_svalue(svalue_t *arg) {
       case T_FUNCTION:
         tell_object(command_giver, "<FUNCTION>", strlen("<FUNCTION>"));
         break;
-#ifndef NO_BUFFER_TYPE
       case T_BUFFER:
         tell_object(command_giver, "<BUFFER>", strlen("<BUFFER>"));
         break;
-#endif
       default:
         tell_object(command_giver, "<UNKNOWN>", strlen("<UNKNOWN>"));
         break;
@@ -1424,7 +1438,7 @@ void do_write(svalue_t *arg) {
   object_t *ob = command_giver;
 
 #ifndef NO_SHADOWS
-  if (ob == 0 && current_object->shadowing) {
+  if (ob == nullptr && current_object->shadowing) {
     ob = current_object;
   }
   if (ob) {
@@ -1453,7 +1467,7 @@ object_t *find_object(const char *str) {
   char tmpbuf[MAX_OBJECT_NAME_SIZE];
 
   if (!filename_to_obname(str, tmpbuf, sizeof tmpbuf)) {
-    return 0;
+    return nullptr;
   }
 
   if ((ob = ObjectTable::instance().find(tmpbuf))) {
@@ -1461,7 +1475,7 @@ object_t *find_object(const char *str) {
   }
   ob = load_object(tmpbuf, 1);
   if (!ob || (ob->flags & O_DESTRUCTED)) { /* *sigh* */
-    return 0;
+    return nullptr;
   }
   return ob;
 }
@@ -1472,13 +1486,13 @@ object_t *find_object2(const char *str) {
   char p[MAX_OBJECT_NAME_SIZE];
 
   if (!filename_to_obname(str, p, sizeof p)) {
-    return 0;
+    return nullptr;
   }
 
   if ((ob = ObjectTable::instance().find(p))) {
     return ob;
   }
-  return 0;
+  return nullptr;
 }
 
 #ifndef NO_ENVIRONMENT
@@ -1569,13 +1583,13 @@ void add_light(object_t *p, int n) {
 }
 #endif
 
-static sentence_t *sent_free = 0;
+static sentence_t *sent_free = nullptr;
 uint64_t tot_alloc_sentence;
 
 sentence_t *alloc_sentence() {
   sentence_t *p;
 
-  if (sent_free == 0) {
+  if (sent_free == nullptr) {
     p = reinterpret_cast<sentence_t *>(DMALLOC(sizeof(sentence_t), TAG_SENTENCE, "alloc_sentence"));
     tot_alloc_sentence++;
   } else {
@@ -1583,11 +1597,11 @@ sentence_t *alloc_sentence() {
     sent_free = sent_free->next;
   }
 #ifndef NO_ADD_ACTION
-  p->verb = 0;
+  p->verb = nullptr;
 #endif
-  p->function.s = 0;
-  p->next = 0;
-  p->ob = 0;
+  p->function.s = nullptr;
+  p->next = nullptr;
+  p->ob = nullptr;
   p->flags = 0;
   return p;
 }
@@ -1614,26 +1628,26 @@ void free_sentence(sentence_t *p) {
     if (p->function.f) {
       free_funp(p->function.f);
     } else {
-      p->function.f = 0;
+      p->function.f = nullptr;
     }
   } else {
     if (p->function.s) {
       free_string(p->function.s);
     } else {
-      p->function.s = 0;
+      p->function.s = nullptr;
     }
   }
 #ifndef NO_ADD_ACTION
   if (p->verb) {
     free_string(p->verb);
   }
-  p->verb = 0;
+  p->verb = nullptr;
 #endif
   p->next = sent_free;
   sent_free = p;
 }
 
-void fatal(const char *fmt, ...) {
+[[noreturn]] void fatal(const char *fmt, ...) {
   static int in_fatal = 0;
   char msg_buf[2049];
   va_list args;
@@ -1653,9 +1667,12 @@ void fatal(const char *fmt, ...) {
       // it will catch the problem and allow debugging.
       break;
 #endif
-      debug_message("FluffOS driver attempting to exit gracefully.\n", msg_buf);
+      if (Tracer::enabled()) {
+        Tracer::collect();
+      }
+      debug_message("FluffOS driver attempting to exit gracefully.\n");
       if (current_file) {
-        debug_message("(occured during compilation of %s at line %d)\n", current_file,
+        debug_message("(occurred during compilation of %s at line %d)\n", current_file,
                       current_line);
       }
       if (current_object) {
@@ -1673,6 +1690,7 @@ void fatal(const char *fmt, ...) {
         copy_and_push_string(msg_buf);
         push_object(command_giver);
         push_object(current_object);
+        set_eval(0x7fffffff);
         safe_apply_master_ob(APPLY_CRASH, 3);
         debug_message("crash() in master called successfully.  Aborting.\n");
       }
@@ -1680,17 +1698,8 @@ void fatal(const char *fmt, ...) {
 
   in_fatal = 0;
 
-/* Make sure we don't trap our abort() */
-#ifdef SIGABRT
   signal(SIGABRT, SIG_DFL);
-#endif
-#ifdef SIGIOT
-#if SIGIOT != SIGABRT
-  signal(SIGIOT, SIG_DFL);
-#endif
-#endif
-
-  abort();
+  std::abort();
 }
 
 static int num_error = 0;
@@ -1710,7 +1719,7 @@ static int num_mudlib_error = 0;
  * want to replace it with the system's error string.
  */
 
-void throw_error() {
+[[noreturn]] void throw_error() {
   if (((current_error_context->save_csp + 1)->framekind & FRAME_MASK) == FRAME_CATCH) {
     throw("throw error");
     fatal("Throw_error failed!");
@@ -1743,7 +1752,7 @@ static void add_message_with_location(char *err) {
 
 static void mudlib_error_handler(char *err, int katch) {
   mapping_t *m;
-  const char *file = NULL;
+  const char *file = nullptr;
   int line = 0;
   svalue_t *mret;
 
@@ -1777,7 +1786,9 @@ static void mudlib_error_handler(char *err, int katch) {
   if ((mret == (svalue_t *)-1) || !mret) {
     debug_message("No error handler for error: ");
     debug_message_with_location(err);
-    dump_trace(0);
+    if (num_mudlib_error == 1) {
+      dump_trace(CONFIG_INT(__RC_TRACE_CODE__));
+    }
   } else if (mret->type == T_STRING) {
     debug_message("%s", mret->u.string);
   }
@@ -1785,13 +1796,11 @@ static void mudlib_error_handler(char *err, int katch) {
 
 namespace {
 void _error_handler(char *err) {
-  const char *object_name;
+  const char *object_name = nullptr;
 
   debug_message_with_location(err + 1);
-  if (CONFIG_INT(__RC_TRACE_CODE__)) {
-    object_name = dump_trace(1);
-  } else {
-    object_name = dump_trace(0);
+  if (num_mudlib_error == 1) {
+    object_name = dump_trace(CONFIG_INT(__RC_TRACE_CODE__));
   }
   if (object_name) {
     object_t *ob;
@@ -1825,17 +1834,16 @@ void _error_handler(char *err) {
       add_message(g_current_heartbeat_obj, hb_message, sizeof(hb_message) - 1);
     }
 
-    g_current_heartbeat_obj = 0;
+    g_current_heartbeat_obj = nullptr;
   }
 }
 
-} // namespace
+}  // namespace
 
-
-void error_handler(char *err) {
+[[noreturn]] void error_handler(char *err) {
 /* in case we're going to jump out of load_object */
 #ifndef NO_ENVIRONMENT
-  restrict_destruct = 0;
+  restrict_destruct = nullptr;
 #endif
   num_objects_this_thread = 0; /* reset the count */
 
@@ -1844,20 +1852,23 @@ void error_handler(char *err) {
     /* This is added so that catches generate messages in the log file. */
     if (!CONFIG_INT(__RC_MUDLIB_ERROR_HANDLER__)) {
       debug_message_with_location(err);
-      (void)dump_trace(0);
+      dump_trace(CONFIG_INT(__RC_TRACE_CODE__));
     } else {
       if (num_mudlib_error) {
         debug_message("Error in error handler: ");
         num_error++;
         debug_message_with_location(err);
-        (void)dump_trace(0);
+        if (num_mudlib_error == 1) {
+          dump_trace(CONFIG_INT(__RC_TRACE_CODE__));
+        }
         num_error--;
         num_mudlib_error = 0;
       } else {
         if (max_eval_error) {
-          set_eval(INT64_MAX);
+          set_eval(max_eval_cost);
           outoftime = 0;
         }
+
         if (!too_deep_error) {
           num_mudlib_error++;
           mudlib_error_handler(err, 1);
@@ -1876,17 +1887,6 @@ void error_handler(char *err) {
     catch_value.u.string = string_copy(err, "caught error");
 
     throw("error handler");
-    fatal("throw error failed");
-  }
-
-  if (num_error > 0) {
-    /* This can happen via errors in the object_name() apply. */
-    debug_message("Error '%s' while trying to print error trace -- trace suppressed.\n", err);
-    too_deep_error = max_eval_error = 0;
-    if (current_error_context) {
-      throw("error handler error");
-      fatal("throw error failed");
-    }
   }
 
   num_error++;
@@ -1901,19 +1901,15 @@ void error_handler(char *err) {
     goto exit;
   }
 
-  // For 'too deep recurision' we can't call mudlib error handlers, so we must handle this in driver.
+  // For 'too deep recurision' we can't call mudlib error handlers, so we must handle this in
+  // driver.
   if (too_deep_error) {
     _error_handler(err);
     goto exit;
   }
 
   // Error occured while running mudlib error handler.
-  if (num_mudlib_error) {
-    debug_message("Error in mudlib error handler: ");
-    debug_message_with_location(err);
-    (void) dump_trace(0);
-    num_mudlib_error = 0;
-  } else {
+  if (!num_mudlib_error) {
     num_mudlib_error++;
     num_error--;
     outoftime = 0;
@@ -1923,17 +1919,29 @@ void error_handler(char *err) {
     }
     num_mudlib_error--;
     num_error++;
+  } else if (num_mudlib_error == 1) {
+    debug_message("Error in mudlib error handler: ");
+    debug_message_with_location(err);
+    dump_trace(CONFIG_INT(__RC_TRACE_CODE__));
+    num_mudlib_error--;
   }
 exit:
   num_error--;
-  too_deep_error = max_eval_error = 0;
-  if (current_error_context) {
-    throw("error handler error2");
+
+  if (num_error || num_mudlib_error) {
+    /* This can happen via errors in the object_name() apply. */
+    debug_message("Error '%s' occurred while trying to print error trace -- trace suppressed.\n",
+                  err);
+  } else {
+    too_deep_error = max_eval_error = 0;
   }
-  throw("BUG: Impossible to get here.");
+  if (current_error_context) {
+    throw("error handler error");
+  }
+  fatal("Driver BUG: no error context.");
 }
 
-void error_needs_free(char *s) {
+[[noreturn]] void error_needs_free(char *s) {
   char err_buf[2048];
   strncpy(err_buf + 1, s, 2047);
   err_buf[0] = '*'; /* all system errors get a * at the start */
@@ -1943,7 +1951,7 @@ void error_needs_free(char *s) {
   error_handler(err_buf);
 }
 
-void error(const char *const fmt, ...) {
+[[noreturn]] void error(const char *const fmt, ...) {
   char err_buf[2048];
   va_list args;
 
@@ -1951,7 +1959,6 @@ void error(const char *const fmt, ...) {
   vsnprintf(err_buf + 1, 2046, fmt, args);
   va_end(args);
   err_buf[0] = '*'; /* all system errors get a * at the start */
-  DTRACE_PROBE1(fluffos, error, (char *)err_buf);
   error_handler(err_buf);
 }
 
@@ -2019,12 +2026,12 @@ object_t *first_inventory(svalue_t *arg) {
   if (arg->type == T_STRING) {
     ob = find_object(arg->u.string);
     if (ob && !object_visible(ob)) {
-      ob = 0;
+      ob = nullptr;
     }
   } else {
     ob = arg->u.ob;
   }
-  if (ob == 0) {
+  if (ob == nullptr) {
     bad_argument(arg, T_STRING | T_OBJECT, 1, F_FIRST_INVENTORY);
   }
   ob = ob->contains;
@@ -2057,7 +2064,7 @@ void tell_npc(object_t *ob, const char *str) {
  */
 void tell_object(object_t *ob, const char *str, int len) {
   if (!ob || (ob->flags & O_DESTRUCTED)) {
-    add_message(0, str, len);
+    add_message(nullptr, str, len);
     return;
   }
   if (CONFIG_INT(__RC_INTERACTIVE_CATCH_TELL__)) {

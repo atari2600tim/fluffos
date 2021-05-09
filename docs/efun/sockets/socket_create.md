@@ -12,33 +12,41 @@ title: sockets / socket_create
     #include <socket_err.h>
 
     int socket_create( int mode, string read_callback,
-    void | string close_callback );
+                       void | string close_callback );
 
 ### DESCRIPTION
 
     socket_create()  creates  an efun socket. mode determines which type of
     socket is created. Currently supported socket modes are:
 
-    MUD         for sending LPC data types using TCP protocol.
+    0  MUD             for sending LPC data types using TCP protocol.
 
-    STREAM      for sending raw data using TCP protocol.
+    1  STREAM          for sending raw data using TCP protocol.
 
-    DATAGRAM    for using UDP protocol.
+    2  DATAGRAM        for using UDP protocol.
+
+    3  STREAM_BINARY   for exchange binary message with TCP protocol.
+
+    4  DATAGRAM_BINARY for exchange binary message with UDP protocol.
 
     The argument read_callback is the name of a function for the driver  to
     call  when the socket gets data from its peer. The read callback should
     follow this format:
 
-    void read_callback(int fd, mixed message)
+        void read_callback(int fd, mixed message, string addr)
 
     Where fd is the socket which received the data, and message is the data
-    which was received.
+    which was received, addr is the client address.
+
+    In non-binary mode, message will be sanitized with UTF8 encoding and returned as an string.
+
+    In binary mode, raw messages will be returned as a buffer.
 
     The argument close_callback is the name of a function for the driver to
     call if the socket closes unexpectedly, i.e. not as  the  result  of  a
     socket_close(3) call. The close callback should follow this format:
 
-    void close_callback(int fd)
+        void close_callback(int fd)
 
     Where  fd  is the socket which has closed.  NOTE: close_callback is not
     used with DATAGRAM mode sockets.
@@ -47,9 +55,9 @@ title: sockets / socket_create
 
     socket_create() returns:
 
-    a non-negative descriptor on success.
+        a non-negative descriptor on success.
 
-    a negative value indicated below on error.
+        a negative value indicated below on error.
 
 ### ERRORS
 

@@ -14,9 +14,6 @@
 #define __STDC_FORMAT_MACROS
 #endif
 
-/* autoconf generated. */
-#include "config.h"
-
 /* the definition of ARCH */
 #include "base/internal/arch.h"
 
@@ -106,35 +103,18 @@
 #define LOAD_FLOAT(x, y) LOAD8(x, y)
 #define STORE_FLOAT(x, y) STORE8(x, y)
 
-#define COPY_PTR(x, y) \
-({ \
-switch(sizeof(char *)) { \
-case 4: COPY4(x, y); break; \
-case 8: COPY8(x, y); break; \
-default: \
-throw "pointers of size other than 4 or 8 not implemented"; \
-} \
-})
-
-#define LOAD_PTR(x, y) \
-({ \
-switch(sizeof(char *)) { \
-case 4: LOAD4(x, y); break; \
-case 8: LOAD8(x, y); break; \
-default: \
-throw "pointers of size other than 4 or 8 not implemented"; \
-} \
-})
-
-#define STORE_PTR(x, y) \
-({ \
-switch(sizeof(char *)) { \
-case 4: STORE4(x, y); break; \
-case 8: STORE8(x, y); break; \
-default: \
-throw "pointers of size other than 4 or 8 not implemented"; \
-} \
-})
+#include <cstdint>
+#if UINTPTR_MAX == UINT32_MAX
+#define COPY_PTR(x, y) COPY4(x, y)
+#define LOAD_PTR(x, y) LOAD4(x, y)
+#define STORE_PTR(x, y) STORE4(x, y)
+#elif UINTPTR_MAX == UINT64_MAX
+#define COPY_PTR(x, y) COPY8(x, y)
+#define LOAD_PTR(x, y) LOAD8(x, y)
+#define STORE_PTR(x, y) STORE8(x, y)
+#else
+#error pointers of size other than 4 or 8 not implemented
+#endif
 
 #define POINTER_INT intptr_t
 #define INS_POINTER ins_pointer
@@ -156,8 +136,22 @@ throw "pointers of size other than 4 or 8 not implemented"; \
 #define uisascii(x) isascii((unsigned char)x)
 #define uisprint(x) isprint((unsigned char)x)
 
+#ifndef __CURRENT_FILE_LINE__
+#define __STRINGIFY(x) #x
+#define __TOSTRING(x) __STRINGIFY(x)
+#define __CURRENT_FILE_LINE__ __FILE__ ":" __TOSTRING(__LINE__)
+#endif
+
 /* Compare two number */
 #define COMPARE_NUMS(x, y) (((x) > (y) ? 1 : ((x) < (y) ? -1 : 0)))
+
+#ifdef _WIN32
+#define FMT_SOCKET_FD PRIdPTR
+#else
+#define FMT_SOCKET_FD "d"
+#endif
+
+#include "base/internal/port.h"  // must be first
 
 #include "base/internal/debugmalloc.h"
 #include "base/internal/md.h"
@@ -172,7 +166,7 @@ throw "pointers of size other than 4 or 8 not implemented"; \
 
 #include "base/internal/outbuf.h"
 
-#include "base/internal/port.h"
+#include "base/internal/rusage.h"
 
 #include "base/internal/rc.h"
 
@@ -182,5 +176,9 @@ throw "pointers of size other than 4 or 8 not implemented"; \
 
 #include "base/internal/strput.h"
 
-#endif  // STD_H
+#include "base/internal/strutils.h"
+
+#include "thirdparty/scope_guard/scope_guard.hpp"
+
 // IWYU pragma: end_exports
+#endif  // STD_H

@@ -4,6 +4,9 @@
 
 #include <stdlib.h>  // for qsort
 
+#include "vm/internal/apply.h"
+#include "vm/internal/simulate.h"
+
 #ifdef PACKAGE_MUDLIB_STATS
 #include "packages/mudlib_stats/mudlib_stats.h"
 #endif
@@ -33,7 +36,7 @@ array_t the_null_array = {
 #endif
     0, /* size */
 #ifdef PACKAGE_MUDLIB_STATS
-    {0}, /* statgroup_t stats */
+    {nullptr}, /* statgroup_t stats */
 #endif
     {{0, 0, {0}}}, /* svalue_t item[1] */
 };
@@ -96,7 +99,7 @@ array_t *allocate_empty_array(int n) {
   return int_allocate_empty_array(n);
 }
 
-static array_t *int_allocate_array(int n) {
+static array_t *int_allocate_array(unsigned int n) {
   array_t *p = int_allocate_empty_array(n);
 
   while (n--) {
@@ -197,8 +200,8 @@ static array_t *fix_array(array_t *p, unsigned int n) {
 }
 
 array_t *resize_array(array_t *p, unsigned int n) {
-  // it is possible that n < p->size, be careful to not upgrade the result to unsigned.
-  total_array_size += (int)((int)n - (int)p->size) * int(sizeof(svalue_t));
+  total_array_size -= p->size * sizeof(svalue_t);
+  total_array_size += n * sizeof(svalue_t);
   if (n) {
     ms_remove_stats(p);
     p = RESIZE_ARRAY(p, n);
@@ -219,193 +222,118 @@ array_t *resize_array(array_t *p, unsigned int n) {
   return p;
 }
 
-array_t *explode_string(const char *str, int slen, const char *del, int len) {
+array_t *explode_string(const char *str, int slen, const char *del, int dellen, bool reversible) {
   auto max_array_size = CONFIG_INT(__MAX_ARRAY_SIZE__);
-
-  const char *p, *beg, *lastdel = 0;
-  int num, j, limit;
-  array_t *ret;
-  char *buff, *tmp;
-  int sz;
 
   if (!slen) {
     return &the_null_array;
   }
 
   /* return an array of length strlen(str) -w- one character per element */
-  if (len == 0) {
-    sz = 1;
-    auto max_array_size = CONFIG_INT(__MAX_ARRAY_SIZE__);
+  if (dellen == 0) {
+    auto result = u8_egc_split(str);
+    int size = result.size();
 
-    if (slen > max_array_size) {
-      slen = max_array_size;
+    if (size > max_array_size) {
+      size = max_array_size;
     }
-    ret = int_allocate_empty_array(slen);
-    for (j = 0; j < slen; j++) {
+    auto ret = int_allocate_empty_array(size);
+    for (int j = 0; j < size; j++) {
       ret->item[j].type = T_STRING;
       ret->item[j].subtype = STRING_MALLOC;
-      ret->item[j].u.string = tmp = new_string(1, "explode_string: tmp");
-      tmp[0] = str[j];
-      tmp[1] = '\0';
+      ret->item[j].u.string = string_copy(result[j].c_str(), "explode_string: tmp");
     }
     return ret;
   }
-  if (len == 1) {
-    char delimeter;
 
-    delimeter = *del;
+  auto source = str;
+  auto sourcelen = slen;
 
-    if (!CONFIG_INT(__RC_REVERSIBLE_EXPLODE_STRING__)) {
-      /*
-       * Skip leading 'del' strings, if any.
-       */
-      while (*str == delimeter) {
-        str++;
-        slen--;
-        if (str[0] == '\0') {
-          return &the_null_array;
-        }
-        if (CONFIG_INT(__RC_SANE_EXPLODE_STRING__) != 0) {
-          break;
-        }
-      }
-    }
-    /*
-     * Find number of occurences of the delimiter 'del'.
-     */
-    for (p = str, num = 0; *p;) {
-      if (*p == delimeter) {
-        num++;
-        lastdel = p;
-      }
-      p++;
-    }
+  auto num_leading = 0;
+  auto num_trailing = 0;
 
-    /*
-     * Compute number of array items. It is either number of delimiters,
-     * or, one more.
-     */
-    limit = max_array_size;
-    if (CONFIG_INT(__RC_REVERSIBLE_EXPLODE_STRING__)) {
-      num++;
-      limit--;
-    } else {
-      if (lastdel != (str + slen - 1)) {
-        num++;
-        limit--;
-      }
-    }
-    if (num > max_array_size) {
-      num = max_array_size;
-    }
-    ret = int_allocate_empty_array(num);
-    for (p = str, beg = str, num = 0; *p && (num < limit);) {
-      if (*p == delimeter) {
-        DEBUG_CHECK(num >= ret->size, "Index out of bounds in explode!\n");
-        sz = p - beg;
-        ret->item[num].type = T_STRING;
-        ret->item[num].subtype = STRING_MALLOC;
-        ret->item[num].u.string = buff = new_string(sz, "explode_string: buff");
-
-        strncpy(buff, beg, sz);
-        buff[sz] = '\0';
-        num++;
-        beg = ++p;
-      } else {
-        p++;
-      }
-    }
-
-    if (CONFIG_INT(__RC_REVERSIBLE_EXPLODE_STRING__)) {
-      ret->item[num].type = T_STRING;
-      ret->item[num].subtype = STRING_MALLOC;
-      ret->item[num].u.string = string_copy(beg, "explode_string: last, len == 1");
-    } else {
-      /* Copy last occurence, if there was not a 'del' at the end. */
-      if (*beg != '\0' && num != limit) {
-        ret->item[num].type = T_STRING;
-        ret->item[num].subtype = STRING_MALLOC;
-        ret->item[num].u.string = string_copy(beg, "explode_string: last, len == 1");
-      }
-    }
-    return ret;
-  } /* len == 1 */
-
-  if (!CONFIG_INT(__RC_REVERSIBLE_EXPLODE_STRING__)) {
-    /*
-     * Skip leading 'del' strings, if any.
-     */
-    while (strncmp(str, del, len) == 0) {
-      str += len;
-      slen -= len;
-      if (str[0] == '\0') {
-        return &the_null_array;
-      }
+  /*
+   * Count leading 'del' strings.
+   * in reversible mode, no skipping at all.
+   * in sane mode, only skip one.
+   */
+  while (sourcelen && u8_egc_index_to_offset(source, u8_egc_find_as_index(source, sourcelen, del,
+                                                                          dellen, false)) == 0) {
+    source += dellen;
+    sourcelen -= dellen;
+    num_leading++;
+  }
+  if (num_leading) {
+    if (!reversible) {
       if (CONFIG_INT(__RC_SANE_EXPLODE_STRING__)) {
-        break;
+        num_leading--;
+      } else {
+        num_leading = 0;
       }
-    }
-  }
-  /*
-   * Find number of occurences of the delimiter 'del'.
-   */
-  for (p = str, num = 0; *p;) {
-    if (strncmp(p, del, len) == 0) {
-      num++;
-      lastdel = p;
-      p += len;
-    } else {
-      p++;
     }
   }
 
   /*
-   * Compute number of array items. It is either number of delimiters, or,
-   * one more.
+   * Count trailing 'del' strings.
+   * in reversible mode, no skipping at all.
+   * in other mode, only skip one.
    */
-  if (CONFIG_INT(__RC_REVERSIBLE_EXPLODE_STRING__)) {
-    num++;
-  } else {
-    if (lastdel != (str + slen - len)) {
-      num++;
+  while (sourcelen) {
+    auto i =
+        u8_egc_index_to_offset(source, u8_egc_find_as_index(source, sourcelen, del, dellen, true));
+    if (i <= 0 || i != (sourcelen - dellen)) break;
+    sourcelen -= dellen;
+    num_trailing++;
+  }
+  if (num_trailing) {
+    if (!reversible) {
+      num_trailing--;
     }
   }
+
+  if (!sourcelen || source[0] == '\0') {
+    return &the_null_array;
+  }
+
+  std::vector<std::string> results;
+  for (int i = 0; i < num_leading; i++) {
+    results.push_back("");
+  }
+  while (sourcelen) {
+    int i =
+        u8_egc_index_to_offset(source, u8_egc_find_as_index(source, sourcelen, del, dellen, false));
+    // no more occurrence, copy the remaining part.
+    if (i == -1) {
+      results.push_back(std::string(source, sourcelen));
+      break;
+    } else if (i > 0) {
+      // if we have text before delimiter, add them
+      results.push_back(std::string(source, i));
+      source += i;
+      sourcelen -= i;
+
+      source += dellen;
+      sourcelen -= dellen;
+    } else if (i == 0) {
+      results.push_back("");
+
+      source += dellen;
+      sourcelen -= dellen;
+    }
+  }
+  for (int i = 0; i < num_trailing; i++) {
+    results.push_back("");
+  }
+
+  auto num = results.size();
   if (num > max_array_size) {
     num = max_array_size;
   }
-  ret = int_allocate_empty_array(num);
-  limit = max_array_size - 1; /* extra element can be added after loop */
-  for (p = str, beg = str, num = 0; *p && (num < limit);) {
-    if (strncmp(p, del, len) == 0) {
-      if (num >= ret->size) {
-        fatal("Index out of bounds in explode!\n");
-      }
-
-      ret->item[num].type = T_STRING;
-      ret->item[num].subtype = STRING_MALLOC;
-      ret->item[num].u.string = buff = new_string(p - beg, "explode_string: buff");
-
-      strncpy(buff, beg, p - beg);
-      buff[p - beg] = '\0';
-      num++;
-      beg = p + len;
-      p = beg;
-    } else {
-      p++;
-    }
-  }
-
-  /* Copy last occurence, if there was not a 'del' at the end. */
-  if (CONFIG_INT(__RC_REVERSIBLE_EXPLODE_STRING__)) {
-    ret->item[num].type = T_STRING;
-    ret->item[num].subtype = STRING_MALLOC;
-    ret->item[num].u.string = string_copy(beg, "explode_string: last, len != 1");
-  } else {
-    if (*beg != '\0' && num != limit) {
-      ret->item[num].type = T_STRING;
-      ret->item[num].subtype = STRING_MALLOC;
-      ret->item[num].u.string = string_copy(beg, "explode_string: last, len != 1");
-    }
+  auto ret = int_allocate_empty_array(num);
+  for (int i = 0; i < num; i++) {
+    ret->item[i].type = T_STRING;
+    ret->item[i].subtype = STRING_MALLOC;
+    ret->item[i].u.string = string_copy(results[i].c_str(), "explode_string: buff");
   }
   return ret;
 }
@@ -421,7 +349,9 @@ char *implode_string(array_t *arr, const char *del, int del_len) {
     }
   }
   if (num == 0) {
-    return string_copy("", "implode_string");
+    auto res = new_string(0, "implode_string");
+    res[0] = '\0';
+    return res;
   }
 
   p = new_string(size + (num - 1) * del_len, "implode_string: p");
@@ -466,7 +396,7 @@ void implode_array(funptr_t *fptr, array_t *arr, svalue_t *dest, int first_on_st
     push_svalue(&arr->item[i++]);
   }
 
-  while (1) {
+  while (true) {
     push_svalue(&arr->item[i++]);
     v = call_function_pointer(fptr, 2);
     if (!v) {
@@ -624,9 +554,9 @@ void filter_array(svalue_t *arg, int num_arg) {
     process_efun_callback(1, &ftc, F_FILTER);
 
     /* allocate a full size array and push it onto the stack so that if an
-         * error occurs, it'll get cleaned up.  can't use empty array because
-         * if an error occurs, it'll contain garbage and crash the driver
-         */
+     * error occurs, it'll get cleaned up.  can't use empty array because
+     * if an error occurs, it'll contain garbage and crash the driver
+     */
     r = allocate_array(size);
     push_refed_array(r);
 
@@ -733,10 +663,8 @@ int sameval(svalue_t *arg1, svalue_t *arg2) {
       return arg1->u.fp == arg2->u.fp;
     case T_REAL:
       return arg1->u.real == arg2->u.real;
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER:
       return arg1->u.buf == arg2->u.buf;
-#endif
   }
   return 0;
 }
@@ -755,7 +683,7 @@ typedef struct unique_list_s {
   struct unique_list_s *next;
 } unique_list_t;
 
-static unique_list_t *g_u_list = 0;
+static unique_list_t *g_u_list = nullptr;
 
 static void unique_array_error_handler(void) {
   unique_list_t *unlist = g_u_list;
@@ -779,7 +707,7 @@ void f_unique_array(void) {
   svalue_t *skipval, *sv, *svp;
   unique_list_t *unlist;
   unique_t **head, *uptr, *nptr;
-  funptr_t *fptr = 0;
+  funptr_t *fptr = nullptr;
   const char *func;
 
   size = (v = (sp - num_arg + 1)->u.arr)->size;
@@ -810,7 +738,7 @@ void f_unique_array(void) {
   unlist = reinterpret_cast<unique_list_t *>(
       DMALLOC(sizeof(unique_list_t), TAG_TEMPORARY, "f_unique_array:1"));
   unlist->next = g_u_list;
-  unlist->head = 0;
+  unlist->head = nullptr;
   head = &unlist->head;
   g_u_list = unlist;
 
@@ -825,7 +753,7 @@ void f_unique_array(void) {
     } else if (v->item[i].type == T_OBJECT) {
       sv = apply(func, v->item[i].u.ob, 0, ORIGIN_EFUN);
     } else {
-      sv = 0;
+      sv = nullptr;
     }
 
     if (sv && !sameval(sv, skipval)) {
@@ -1057,9 +985,9 @@ void map_array(svalue_t *arg, int num_arg) {
 void map_string(svalue_t *arg, int num_arg) {
   char *arr;
   char *p;
-  funptr_t *fptr = 0;
+  funptr_t *fptr = nullptr;
   int numex = 0;
-  object_t *ob = 0;
+  object_t *ob = nullptr;
   svalue_t *extra, *v;
   const char *func;
 
@@ -1086,7 +1014,7 @@ void map_string(svalue_t *arg, int num_arg) {
         ob = arg[2].u.ob;
       } else if (arg[2].type == T_STRING) {
         if ((ob = find_object(arg[2].u.string)) && !object_visible(ob)) {
-          ob = 0;
+          ob = nullptr;
         }
       }
       if (num_arg > 3) {
@@ -1136,8 +1064,8 @@ array_t *builtin_sort_array(array_t *inlist, int dir) {
 }
 
 static int builtin_sort_array_cmp_fwd(const void *vp1, const void *vp2) {
-  svalue_t *p1 = (svalue_t *)vp1;
-  svalue_t *p2 = (svalue_t *)vp2;
+  auto *p1 = (svalue_t *)vp1;
+  auto *p2 = (svalue_t *)vp2;
   switch (p1->type | p2->type) {
     case T_STRING: {
       return strcmp(p1->u.string, p2->u.string);
@@ -1189,8 +1117,8 @@ static int builtin_sort_array_cmp_rev(const void *vp1, const void *vp2) {
 }
 
 static int sort_array_cmp(const void *vp1, const void *vp2) {
-  svalue_t *p1 = (svalue_t *)vp1;
-  svalue_t *p2 = (svalue_t *)vp2;
+  auto *p1 = (svalue_t *)vp1;
+  auto *p2 = (svalue_t *)vp2;
   svalue_t *d;
 
   push_svalue(p1);
@@ -1381,8 +1309,8 @@ array_t *deep_inventory(object_t *ob, int take_top, funptr_t *fp) {
   dinv = int_allocate_array(o = i);
   push_refed_array(dinv);
   /*
-  * collect visible inventory objects recursively
-  */
+   * collect visible inventory objects recursively
+   */
   if (take_top) {
     if (fp) {
       push_object(ob);
@@ -1455,8 +1383,8 @@ array_t *deep_inventory_array(array_t *arr, int take_top, funptr_t *fp) {
   dinv = int_allocate_array(o = i);
   push_refed_array(dinv);
   /*
-  * collect visible inventory objects recursively
-  */
+   * collect visible inventory objects recursively
+   */
   i = 0;
   for (c = 0; i < o && c < arr->size; c++) {
     if (arr->item[c].type == T_OBJECT) {
@@ -1515,10 +1443,10 @@ static long alist_cmp(svalue_t *p1, svalue_t *p2) {
 static svalue_t *alist_sort(array_t *inlist) {
   long size, j, curix, parix, child1, child2, flag;
   svalue_t *sv_tab, *tmp, *table, *sv_ptr, val;
-  char *str;
+  const char *str;
 
   if (!(size = inlist->size)) {
-    return (svalue_t *)NULL;
+    return (svalue_t *)nullptr;
   }
   if ((flag = (inlist->ref > 1))) {
     sv_tab = reinterpret_cast<svalue_t *>(
@@ -1716,7 +1644,7 @@ array_t *intersect_array(array_t *a1, array_t *a2) {
       }
     }
   } else {
-    char *str;
+    const char *str;
 
     sv_tab = a2->item;
     for (j = 0; j < a2s; j++) {
@@ -1872,7 +1800,7 @@ array_t *union_array(array_t *a1, array_t *a2) {
       }
     }
   } else {
-    char *str;
+    const char *str;
 
     sv_tab = a2->item;
     for (j = 0; j < a2s; j++) {
@@ -2036,7 +1964,7 @@ array_t *livings() {
   object_t **list;
   array_t *ret;
 
-  get_objects(&list, &count, livings_filter, 0);
+  get_objects(&list, &count, livings_filter, nullptr);
 
   if (count > max_array_size) {
     count = max_array_size;
@@ -2058,22 +1986,22 @@ void f_objects(void) {
   auto max_array_size = CONFIG_INT(__MAX_ARRAY_SIZE__);
 
   int count, i;
-  const char *func = 0;
+  const char *func = nullptr;
   object_t **list;
   array_t *ret;
-  funptr_t *f = 0;
+  funptr_t *f = nullptr;
 
   int num_arg = st_num_arg;
 
   if (!num_arg) {
-    func = 0;
+    func = nullptr;
   } else if (sp->type == T_FUNCTION) {
     f = sp->u.fp;
   } else {
     func = sp->u.string;
   }
 
-  get_objects(&list, &count, 0, 0);
+  get_objects(&list, &count, nullptr, nullptr);
   if (f || func) {
     /* NOTE: If an object's hidden status changes during a callback, that
      * change will NOT be reflected in the returned array.  If the caller
@@ -2095,7 +2023,7 @@ void f_objects(void) {
         return;
       }
       if (v->type == T_NUMBER && !v->u.number) {
-        list[i] = 0;
+        list[i] = nullptr;
       }
     }
     for (i = 0; i < count; i++) {

@@ -10,7 +10,7 @@
 
 void outbuf_zero(outbuffer_t *outbuf) {
   outbuf->real_size = 0;
-  outbuf->buffer = 0;
+  outbuf->buffer = nullptr;
 }
 
 int outbuf_extend(outbuffer_t *outbuf, int l) {
@@ -71,7 +71,7 @@ void outbuf_addv(outbuffer_t *outbuf, const char *format, ...) {
   va_list args;
 
   va_start(args, format);
-  vsnprintf(buf, LARGEST_PRINTABLE_STRING, format, args);
+  vsnprintf(buf, sizeof(buf), format, args);
   va_end(args);
 
   if (!outbuf) {

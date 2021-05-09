@@ -5,11 +5,7 @@
  *
  */
 
-#ifdef NO_BUFFER_TYPE
-#define OR_BUFFER
-#else
 #define OR_BUFFER | buffer
-#endif
 
 /* These next few efuns are used internally; do not remove them.
  * The leading _ is used to keep track of which efuns should exist,
@@ -51,15 +47,11 @@ object *all_previous_objects previous_object(int default: -1);
 mixed *call_stack(int default: 0);
 int sizeof(mixed);
 int strlen sizeof(string);
-#ifdef USE_ICONV
-int strwidth(string);
-#else
-int strwidth sizeof(string);
-#endif
 void destruct(object default: F__THIS_OBJECT);
 string file_name(object default: F__THIS_OBJECT);
 string capitalize(string);
 string *explode(string, string);
+string *explode_reversible(string, string);
 mixed implode(mixed *, string | function, void | mixed);
 
 int call_out(string | function, int|float, ...);
@@ -71,6 +63,7 @@ int remove_call_out(int | void | string);
 int member_array(mixed, string | mixed *, void | int, void | int);
 int input_to(string | function, ...);
 int random(int);
+int secure_random(int);
 void defer(function);
 
 #ifndef NO_ENVIRONMENT
@@ -110,7 +103,7 @@ int restore_object(string, void | int);
 mixed save_object(string | int | void, void | int);
 string save_variable(mixed);
 mixed restore_variable(string);
-object *users();
+object* users();
 mixed *get_dir(string, int default: 0);
 int strsrch(string, string | int, int default: 0);
 #ifdef COMPAT_32
@@ -166,10 +159,8 @@ int objectp(mixed);
 int classp(mixed);
 string typeof(mixed);
 
-#ifndef NO_BUFFER_TYPE
 int bufferp(mixed);
 buffer allocate_buffer(int);
-#endif
 
 int inherits(string, object default: F__THIS_OBJECT);
 void replace_program(string);
@@ -184,10 +175,8 @@ int crc32(string OR_BUFFER);
 
 /* commands operating on files */
 
-#ifndef NO_BUFFER_TYPE
 mixed read_buffer(string | buffer, void | int, void | int);
 int write_buffer(string | buffer, int, string | buffer | int);
-#endif
 int write_file(string, string, int default:0);
 int rename(string, string);
 int write_bytes(string, int, string);
@@ -196,8 +185,9 @@ int file_size(string);
 string read_bytes(string, void | int, void | int);
 string read_file(string, void | int, void | int);
 int cp(string, string);
-
+#ifndef _WIN32
 int link(string, string);
+#endif
 int mkdir(string);
 int rm(string);
 int rmdir(string);
@@ -212,11 +202,15 @@ int next_bit(string, int);
 string crypt(string, string | int);
 string oldcrypt(string, string | int);
 
-string ctime(int | void);
-int exec(object, object);
-mixed *localtime(int);
-string function_exists(string, void | object, void | int);
 
+int time();
+string strftime(string, int);
+int strptime(string, string);
+string ctime(int | void);
+mixed *localtime(int);
+
+int exec(object, object);
+string function_exists(string, void | object, void | int);
 object *objects(void | string | function);
 string query_host_name();
 int query_idle(object);
@@ -241,7 +235,6 @@ object query_shadowing(object);
 #endif
 mixed *sort_array(mixed *, int | string | function, ...);
 void throw(mixed);
-int time();
 mixed *unique_array(mixed *, string | function, void | mixed);
 mapping unique_mapping(mixed *, string | function, ...);
 string *deep_inherit_list(object default:F__THIS_OBJECT);
@@ -365,17 +358,29 @@ mapping *function_profile(object default:F__THIS_OBJECT);
 #endif
 
 int resolve(string, string | function);
-#ifdef USE_ICONV
-int set_encoding(string);
-string to_utf8(string, string);
-string utf8_to(string, string);
-int *str_to_arr(string);
-string arr_to_str(int *);
-#endif
+string set_encoding(string | void);
+string query_encoding();
+string string_decode(buffer, string);
+buffer string_encode(string, string);
+buffer buffer_transcode(buffer, string, string);
+
 void act_mxp();
-void websocket_handshake_done();
 void request_term_type();
 void start_request_term_type();
 void request_term_size(void | int);
+void telnet_nop();
+
 /* shutdown is at the end because it is only called once per boot cycle :) */
 void shutdown(void | int);
+// Get current LPC stacktrace
+mixed* dump_trace();
+// Get display width of given string
+int strwidth(string);
+
+// start to collect tracing data
+void trace_start(string, int default: 10);
+// stop to collect tracing data right away.
+void trace_end();
+
+// return highest resolution clock in nanoseconds
+int perf_counter_ns();

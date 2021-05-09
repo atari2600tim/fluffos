@@ -7,14 +7,14 @@
 
 #include <chrono>
 #ifdef TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
+#include <sys/time.h>
+#include <time.h>
 #else
-# ifdef HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
+#ifdef HAVE_SYS_TIME_H
+#include <sys/time.h>
+#else
+#include <time.h>
+#endif
 #endif
 
 typedef struct pending_call_s {
@@ -42,6 +42,7 @@ void remove_all_call_out(object_t *);
 int find_call_out(object_t *, const char *);
 array_t *get_all_call_outs(void);
 int print_call_out_usage(outbuffer_t *, int);
+int total_callout_size();
 void mark_call_outs(void);
 void reclaim_call_outs(void);
 

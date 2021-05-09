@@ -162,14 +162,12 @@ void f_eq() {
       free_funp(sp->u.fp);
       break;
     }
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER: {
       i = (sp - 1)->u.buf == sp->u.buf;
       free_buffer((sp--)->u.buf);
       free_buffer(sp->u.buf);
       break;
     }
-#endif
     default:
       pop_stack();
       free_svalue(sp, "f_eq");
@@ -372,10 +370,10 @@ void f_mod_eq() {
   svalue_t *argp;
 
   if ((argp = sp->u.lvalue)->type != T_NUMBER) {
-    error("Bad left type to %=\n");
+    error("Bad left type to %%=\n");
   }
   if ((--sp)->type != T_NUMBER) {
-    error("Bad right type to %=\n");
+    error("Bad right type to %%=\n");
   }
   if (sp->u.number == 0) {
     error("Modulo by 0\n");
@@ -504,14 +502,12 @@ void f_ne() {
       break;
     }
 
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER: {
       i = (sp - 1)->u.buf != sp->u.buf;
       free_buffer((sp--)->u.buf);
       free_buffer(sp->u.buf);
       break;
     }
-#endif
 
     default:
       pop_stack();
@@ -614,8 +610,6 @@ void f_parse_command() {
 }
 
 void f_range(int code) {
-  int from, to, len;
-
   if ((sp - 2)->type != T_NUMBER) {
     error("Start of range [ .. ] interval must be a number.\n");
   }
@@ -625,9 +619,15 @@ void f_range(int code) {
 
   switch (sp->type) {
     case T_STRING: {
+      int32_t from, to;
+      size_t len;
       const char *res = sp->u.string;
 
-      len = SVALUE_STRLEN(sp);
+      auto success = u8_egc_count(res, &len);
+      if (!success) {
+        error("Invalid UTF-8 string: f_range");
+      }
+
       to = (--sp)->u.number;
 
       if (!CONFIG_INT(__RC_OLD_RANGE_BEHAVIOR__)) {
@@ -665,19 +665,28 @@ void f_range(int code) {
       }
 
       if (to >= len - 1) {
-        put_malloced_string(string_copy(res + from, "f_range"));
+        auto offset = u8_egc_index_to_offset(res, from);
+        if (offset < 0) {
+          error("f_range: invalid offset");
+        }
+        put_malloced_string(string_copy(res + offset, "f_range"));
       } else {
-        char *tmp;
-        tmp = new_string(to - from + 1, "f_range");
-        strncpy(tmp, res + from, to - from + 1);
-        tmp[to - from + 1] = '\0';
+        auto start = u8_egc_index_to_offset(res, from);
+        auto end = u8_egc_index_to_offset(res, from + (to - from + 1));
+        if (start < 0 || end < 0) {
+          error("f_range: invalid offset");
+        }
+        char *tmp = new_string(end - start, "f_range");
+        strncpy(tmp, res + start, end - start);
+        tmp[end - start] = '\0';
         put_malloced_string(tmp);
       }
       free_string_svalue(sp + 2);
       break;
     }
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER: {
+      int from, to, len;
+
       buffer_t *rbuf = sp->u.buf;
 
       len = rbuf->size;
@@ -721,9 +730,10 @@ void f_range(int code) {
       }
       break;
     }
-#endif
 
     case T_ARRAY: {
+      int from, to;
+
       array_t *v = sp->u.arr;
       to = (--sp)->u.number;
       if (code & 0x01) {
@@ -743,17 +753,20 @@ void f_range(int code) {
 }
 
 void f_extract_range(int code) {
-  int from, len;
-
   if ((sp - 1)->type != T_NUMBER) {
     error("Start of range [ .. ] interval must be a number.\n");
   }
 
   switch (sp->type) {
     case T_STRING: {
-      const char *res = sp->u.string;
+      int32_t from;
+      size_t len;
 
-      len = SVALUE_STRLEN(sp);
+      const char *res = sp->u.string;
+      auto success = u8_egc_count(res, &len);
+      if (!success) {
+        error("Invalid UTF-8 String: f_extract_range.");
+      }
       from = (--sp)->u.number;
       if (code) {
         from = len - from;
@@ -774,13 +787,19 @@ void f_extract_range(int code) {
         sp->subtype = STRING_CONSTANT;
         sp->u.string = "";
       } else {
-        put_malloced_string(string_copy(res + from, "f_extract_range"));
+        auto offset = u8_egc_index_to_offset(res, from);
+        if (offset < 0) {
+          error("f_range: invalid offset");
+        }
+        put_malloced_string(string_copy(res + offset, "f_extract_range"));
       }
       free_string_svalue(sp + 1);
       break;
     }
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER: {
+      int32_t from;
+      size_t len;
+
       buffer_t *rbuf = sp->u.buf;
       buffer_t *nbuf;
 
@@ -809,9 +828,10 @@ void f_extract_range(int code) {
       put_buffer(nbuf);
       break;
     }
-#endif
 
     case T_ARRAY: {
+      size_t from;
+
       array_t *v = sp->u.arr;
       from = (--sp)->u.number;
       if (code) {
@@ -1185,7 +1205,7 @@ void f_function_constructor() {
       num_arg = EXTRACT_UCHAR(pc++);
       locals = EXTRACT_UCHAR(pc++);
       LOAD_SHORT(index, pc); /* length */
-      fp = make_functional_funp(num_arg, locals, index, 0, kind & FP_NOT_BINDABLE);
+      fp = make_functional_funp(num_arg, locals, index, nullptr, kind & FP_NOT_BINDABLE);
       break;
     }
     default:
@@ -1232,10 +1252,10 @@ void f_sscanf() {
   sp += num_arg + 1;
   *sp = *(fp--);       /* move format description to top of stack */
   *(sp - 1) = *(fp);   /* move source string just below the format
-                          * desc. */
+                        * desc. */
   fp->type = T_NUMBER; /* this svalue isn't invalidated below, and
-                          * if we don't change it to something safe,
-                          * it will get freed twice if an error occurs */
+                        * if we don't change it to something safe,
+                        * it will get freed twice if an error occurs */
   /*
    * prep area for rvalues
    */

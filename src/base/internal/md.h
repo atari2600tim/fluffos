@@ -18,6 +18,7 @@ typedef struct md_node_s {
   int id;
   int tag;
   const char *desc;
+  uint64_t gametick;
 #endif
 } md_node_t;
 
@@ -29,20 +30,20 @@ typedef struct md_node_s {
 #endif
 void check_all_blocks(int);
 
-#define MD_TABLE_BITS 14
-#define MD_TABLE_SIZE (1 << MD_TABLE_BITS)
-#define MD_HASH(x) (((unsigned long)x >> 3) & (MD_TABLE_SIZE - 1))
+#define MD_TABLE_BITS 14u
+#define MD_TABLE_SIZE (1u << MD_TABLE_BITS)
+#define MD_HASH(x) (((uintptr_t)x >> 3) & (MD_TABLE_SIZE - 1))
 
 #define PTR(x) ((void *)(x + 1))
 #define NODET_TO_PTR(x, y) ((y)(x + 1))
 #define PTR_TO_NODET(x) ((md_node_t *)(x)-1)
 
-#define DO_MARK(ptr, kind)                                                                      \
-  if (PTR_TO_NODET(ptr)->tag != kind)                                                           \
-    fprintf(stderr, "Expected node of type %04x: got %s %04x\n", kind, PTR_TO_NODET(ptr)->desc, \
-            PTR_TO_NODET(ptr)->tag);                                                            \
-  else                                                                                          \
-  PTR_TO_NODET(ptr)->tag |= TAG_MARKED
+#define DO_MARK(ptr, kind)                                                                    \
+  if (PTR_TO_NODET(ptr)->tag != kind)                                                         \
+    debug_message("Expected node of type %04x: got %s %04x\n", kind, PTR_TO_NODET(ptr)->desc, \
+                  PTR_TO_NODET(ptr)->tag);                                                    \
+  else                                                                                        \
+    PTR_TO_NODET(ptr)->tag |= TAG_MARKED
 
 #ifdef DEBUGMALLOC_EXTENSIONS
 #define SET_TAG(x, y) set_tag(x, y)
@@ -50,16 +51,18 @@ void check_all_blocks(int);
 #define SET_TAG(x, y)
 #endif
 
-#define MAX_CATEGORY 130
+#define MAX_CATEGORY 10
+#define MAX_TAGS 255
+extern uint64_t blocks[MAX_TAGS];
+extern uint64_t totals[MAX_TAGS];
+
 extern md_node_t *table[];
-extern uint64_t totals[MAX_CATEGORY];
-extern uint64_t blocks[MAX_CATEGORY];
 
 extern int malloc_mask;
 extern unsigned int total_malloced;
 extern unsigned int hiwater;
 void MDmalloc(md_node_t *, int, int, const char *);
-int MDfree(void *);
+int MDfree(md_node_t *);
 
 #ifdef DEBUGMALLOC_EXTENSIONS
 void set_tag(const void *, int);

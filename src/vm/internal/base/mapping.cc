@@ -4,10 +4,11 @@
 
 #include <deque>
 #include <map>
+#include <functional>
 
 #include "vm/internal/base/machine.h"
 
-mapping_node_t *locked_map_nodes = 0;
+mapping_node_t *locked_map_nodes = nullptr;
 
 /*
  * LPC mapping (associative arrays) module.  Contains routines for
@@ -22,16 +23,12 @@ mapping_node_t *locked_map_nodes = 0;
  *   at some point as well.
  */
 
-LPC_INT sval_hash(svalue_t x) {
+size_t sval_hash(svalue_t x) {
   switch (x.type) {
     case T_STRING:
       return HASH(BLOCK(x.u.string));
-    case T_NUMBER:
-      return static_cast<unsigned long>(x.u.number);
-    case T_OBJECT:
-    // return HASH(BLOCK(x.u.ob->obname));
     default:
-      return ((((x).u.number)) >> 5);
+      return std::hash<decltype(x.u.arr)>{}(x.u.arr);
   }
 }
 /*
@@ -123,48 +120,51 @@ mapping_t *mapTraverse(mapping_t *m, int (*func)(mapping_t *, mapping_node_t *, 
 /* free_mapping */
 
 void dealloc_mapping(mapping_t *m) {
-  debug(mapping, "mapping.c: actual free of %p\n", (void *)m);
-  num_mappings--;
+  debug(mapping, "mapping.c: actual free of %p\n", m);
   {
     int j = m->table_size, c = MAP_COUNT(m);
     mapping_node_t *elt, *nelt, **a = m->table;
 
-    total_mapping_size -=
-        (sizeof(mapping_t) + sizeof(mapping_node_t *) * (j + 1) + sizeof(mapping_node_t) * c);
+    total_mapping_size -= sizeof(mapping_node_t *) * (j + 1) + sizeof(mapping_node_t) * c;
     total_mapping_nodes -= c;
 #ifdef PACKAGE_MUDLIB_STATS
     add_array_size(&m->stats, -(c << 1));
 #endif
-
     do {
       for (elt = a[j]; elt; elt = nelt) {
         nelt = elt->next;
         free_svalue(elt->values, "free_mapping");
+        *(elt->values) = const0u;
         free_node(m, elt);
       }
     } while (j--);
 
     debug(mapping, ("in free_mapping: before table\n"));
-    FREE((char *)a);
+    FREE(a);
   }
 
   debug(mapping, ("in free_mapping: after table\n"));
-  FREE((char *)m);
+  FREE(m);
+  num_mappings--;
+  total_mapping_size -= sizeof(mapping_t);
   debug(mapping, ("in free_mapping: after m\n"));
   debug(mapping, ("mapping.c: free_mapping end\n"));
 }
 
 void free_mapping(mapping_t *m) {
   debug(mapping, "mapping.c: free_mapping begin, ptr = %p\n", (void *)m);
+  if (m->ref > 0) {
+    m->ref--;
+  }
   /* some other object is still referencing this mapping */
-  if (--m->ref > 0) {
+  if (m->ref > 0) {
     return;
   }
   dealloc_mapping(m);
 }
 
-static mapping_node_t *free_nodes = 0;
-mapping_node_block_t *mapping_node_blocks = 0;
+static mapping_node_t *free_nodes = nullptr;
+mapping_node_block_t *mapping_node_blocks = nullptr;
 
 #ifdef DEBUGMALLOC_EXTENSIONS
 void mark_mapping_node_blocks() {
@@ -189,9 +189,14 @@ mapping_node_t *new_map_node() {
         DMALLOC(sizeof(mapping_node_block_t), TAG_MAP_NODE_BLOCK, "new_map_node"));
     mnb->next = mapping_node_blocks;
     mapping_node_blocks = mnb;
-    mnb->nodes[MNB_SIZE - 1].next = 0;
+    mnb->nodes[MNB_SIZE - 1].next = nullptr;
+    mnb->nodes[MNB_SIZE - 1].values[0] = const0u;
+    mnb->nodes[MNB_SIZE - 1].values[1] = const0u;
+
     for (i = MNB_SIZE - 1; i--;) {
       mnb->nodes[i].next = &mnb->nodes[i + 1];
+      mnb->nodes[i].values[0] = const0u;
+      mnb->nodes[i].values[1] = const0u;
     }
     ret = &mnb->nodes[0];
     free_nodes = &mnb->nodes[1];
@@ -226,9 +231,21 @@ void free_node(mapping_t *m, mapping_node_t *mn) {
     mn->values[0].u.map = m;
   } else {
     free_svalue(mn->values + 1, "free_node");
+    *(mn->values + 1) = const0u;
     mn->next = free_nodes;
     free_nodes = mn;
   }
+}
+
+uint64_t free_node_count() {
+  if (!free_nodes) return 0;
+
+  uint64_t count = 1;
+  auto p = free_nodes;
+  while ((p = p->next)) {
+    count++;
+  }
+  return count;
 }
 
 /* allocate_mapping(int n)
@@ -248,7 +265,7 @@ mapping_t *allocate_mapping(int n) {
   newmap =
       reinterpret_cast<mapping_t *>(DMALLOC(sizeof(mapping_t), TAG_MAPPING, "allocate_mapping: 1"));
   debug(mapping, "mapping.c: allocate_mapping begin, newmap = %p\n", (void *)newmap);
-  if (newmap == NULL) {
+  if (newmap == nullptr) {
     error("Allocate_mapping - out of memory.\n");
   }
 
@@ -266,12 +283,10 @@ mapping_t *allocate_mapping(int n) {
   /* The size is actually 1 higher */
   newmap->unfilled = n * static_cast<unsigned>(FILL_PERCENT) / static_cast<unsigned>(100);
   a = newmap->table = reinterpret_cast<mapping_node_t **>(
-      DMALLOC(n *= sizeof(mapping_node_t *), TAG_MAP_TBL, "allocate_mapping: 3"));
+      DCALLOC(1, n *= sizeof(mapping_node_t *), TAG_MAP_TBL, "allocate_mapping: 3"));
   if (!a) {
     error("Allocate_mapping 2 - out of memory.\n");
   }
-  /* zero out the hash table */
-  memset(a, 0, n);
   total_mapping_size += sizeof(mapping_t) + n;
   newmap->ref = 1;
   newmap->count = 0;
@@ -339,7 +354,7 @@ static mapping_t *copyMapping(mapping_t *m) {
 
   newmap =
       reinterpret_cast<mapping_t *>(DMALLOC(sizeof(mapping_t), TAG_MAPPING, "copy_mapping: 1"));
-  if (newmap == NULL) {
+  if (newmap == nullptr) {
     error("copyMapping - out of memory.\n");
   }
   newmap->table_size = k++;
@@ -414,6 +429,9 @@ int restore_hash_string(char **val, svalue_t *sv) {
           }
           *news = '\0';
           *val = cp;
+          if (!u8_validate(start)) {
+            return ROB_STRING_UTF8_ERROR;
+          }
           sv->u.string = make_shared_string(start);
           sv->type = T_STRING;
           sv->subtype = STRING_SHARED;
@@ -429,6 +447,9 @@ int restore_hash_string(char **val, svalue_t *sv) {
   }
   *val = cp;
   *--cp = '\0';
+  if (!u8_validate(start)) {
+    return ROB_STRING_UTF8_ERROR;
+  }
   sv->u.string = make_shared_string(start);
   sv->type = T_STRING;
   sv->subtype = STRING_SHARED;
@@ -441,7 +462,7 @@ int restore_hash_string(char **val, svalue_t *sv) {
 
 LPC_INT svalue_to_int(svalue_t *v) {
   if (v->type == T_STRING && v->subtype != STRING_SHARED) {
-    char *p = make_shared_string(v->u.string);
+    const char *p = make_shared_string(v->u.string);
     free_string_svalue(v);
     v->subtype = STRING_SHARED;
     v->u.string = p;
@@ -455,18 +476,14 @@ LPC_INT svalue_to_int(svalue_t *v) {
   return MAP_SVAL_HASH(*v);
 }
 
-int msameval(svalue_t *arg1, svalue_t *arg2) {
-  if (sizeof(long) == 8) {
-    return (arg1->u.number == arg2->u.number);
-  } else {
-    switch (arg1->type | arg2->type) {
-      case T_NUMBER:
-        return arg1->u.number == arg2->u.number;
-      case T_REAL:
-        return arg1->u.real == arg2->u.real;
-      default:
-        return arg1->u.arr == arg2->u.arr;
-    }
+int msameval(const svalue_t *arg1, const svalue_t *arg2) {
+  switch (arg1->type | arg2->type) {
+    case T_NUMBER:
+      return arg1->u.number == arg2->u.number;
+    case T_REAL:
+      return arg1->u.real == arg2->u.real;
+    default:
+      return arg1->u.arr == arg2->u.arr;
   }
 }
 
@@ -728,12 +745,27 @@ mapping_t *load_mapping_from_aggregate(svalue_t *sp, int n) {
 
 /* is ok */
 
-svalue_t *find_in_mapping(mapping_t *m, svalue_t *lv) {
-  int i = svalue_to_int(lv) & m->table_size;
+svalue_t *find_in_mapping(const mapping_t *m, svalue_t key) {
+  int i = 0;
+
+  // NOTE: svalue_to_int() will also make string into shared string, which is not what we want
+  // however since all map keys are shared string, we can do a fast lookup here.
+  if (key.type == T_STRING) {
+    if (key.subtype != STRING_SHARED) {
+      key.u.string = findstring(key.u.string);
+      if (!key.u.string) {
+        return &const0u;
+      }
+    }
+    i = HASH(BLOCK(key.u.string));
+  } else {
+    i = svalue_to_int(&key);
+  }
+  i = i & m->table_size;
   mapping_node_t *n = m->table[i];
 
   while (n) {
-    if (msameval(n->values, lv)) {
+    if (msameval(n->values, &key)) {
       return n->values + 1;
     }
     n = n->next;
@@ -742,25 +774,14 @@ svalue_t *find_in_mapping(mapping_t *m, svalue_t *lv) {
   return &const0u;
 }
 
-svalue_t *find_string_in_mapping(mapping_t *m, const char *p) {
-  char *ss = findstring(p);
-  int i;
-  mapping_node_t *n;
-  static svalue_t str = {T_STRING, STRING_SHARED};
+svalue_t *find_string_in_mapping(const mapping_t *m, const char *p) {
+  const char *ss = findstring(p);
   if (!ss) {
     return &const0u;
   }
+  svalue_t str = {T_STRING, STRING_SHARED};
   str.u.string = ss;
-  i = MAP_SVAL_HASH(str);
-  n = m->table[i & m->table_size];
-
-  while (n) {
-    if (n->values->type == T_STRING && n->values->u.string == ss) {
-      return n->values + 1;
-    }
-    n = n->next;
-  }
-  return &const0u;
+  return find_in_mapping(m, str);
 }
 
 /*

@@ -14,42 +14,44 @@
 #include <locale>
 #include <string>
 
+namespace {
+
 // trim from start
-static inline std::string &ltrim(std::string &s, const std::string &charset) {
-  if (charset.empty()) {
-    s.erase(s.begin(),
-            std::find_if(s.begin(), s.end(), std::not1(std::ptr_fun<int, int>(std::isspace))));
-  } else {
-    int pos = s.find_first_not_of(charset);
-    if (pos == -1) {
-      s.clear();
-    } else {
-      s.erase(s.begin(), s.begin() + pos);
-    }
+inline std::string &_ltrim(std::string &s, const std::string &charset) {
+  std::string trimset{charset};
+
+  if (trimset.empty()) {
+    trimset = "\t\n\v\f\r ";
   }
+  s = ltrim(s, trimset);
   return s;
 }
 
 // trim from end
-static inline std::string &rtrim(std::string &s, const std::string &charset) {
-  if (charset.empty()) {
-    s.erase(
-        std::find_if(s.rbegin(), s.rend(), std::not1(std::ptr_fun<int, int>(std::isspace))).base(),
-        s.end());
-  } else {
-    s.erase(s.find_last_not_of(charset) + 1);
+inline std::string &_rtrim(std::string &s, const std::string &charset) {
+  std::string trimset{charset};
+
+  if (trimset.empty()) {
+    trimset = "\t\n\v\f\r ";
   }
+  s = rtrim(s, trimset);
   return s;
 }
 
 // trim from both ends
-static inline std::string &trim(std::string &s, const std::string &charset) {
-  return ltrim(rtrim(s, charset), charset);
+inline std::string &_trim(std::string &s, const std::string &charset) {
+  std::string trimset{charset};
+
+  if (trimset.empty()) {
+    trimset = "\t\n\v\f\r ";
+  }
+  s = trim(s, trimset);
+  return s;
 }
 
 typedef std::string &(trim_func)(std::string &, const std::string &);
 
-static inline void _trim_impl(trim_func *func) {
+inline void _trim_impl(trim_func *func) {
   std::string charset;
 
   // If use 2 arguments, we get characters to remove and positioning in previous
@@ -70,14 +72,16 @@ static inline void _trim_impl(trim_func *func) {
   }
 }
 
+}  // namespace
+
 #ifdef F_TRIM
-void f_trim(void) { _trim_impl(&trim); }
+void f_trim(void) { _trim_impl(&_trim); }
 #endif
 
 #ifdef F_LTRIM
-void f_ltrim(void) { _trim_impl(&ltrim); }
+void f_ltrim(void) { _trim_impl(&_ltrim); }
 #endif
 
 #ifdef F_RTRIM
-void f_rtrim(void) { _trim_impl(&rtrim); }
+void f_rtrim(void) { _trim_impl(&_rtrim); }
 #endif

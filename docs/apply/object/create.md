@@ -9,7 +9,7 @@ title: object / create
 
 ### SYNOPSIS
 
-    void create( void );
+    void create( void | ... );
 
 ### DESCRIPTION
 
@@ -24,6 +24,11 @@ title: object / create
     as  if  create() had been called twice on the same object.  In reality,
     create *is* being called twice, but on  two  *different*  objects:  the
     parent, and the child that is calling parent::create() manually.
+
+    The arguments passed to the function will be the same as those passed to
+    new() or clone_object() in addition to the filename, if the object was
+    loaded using either of those efuns. For example, clone_object(file, 3, "hi")
+    will cause create(3, "hi") to be called in the object after it is created.
 
 ### SEE ALSO
 

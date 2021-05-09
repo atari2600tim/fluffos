@@ -1,6 +1,6 @@
 ---
 layout: default
-title: interactive / receive_message
+title: apply / interactive / receive_message
 ---
 
 ### NAME
@@ -22,3 +22,4 @@ title: interactive / receive_message
 ### SEE ALSO
 
     catch_tell(4), message(3), receive(3), receive_snoop(4)
+

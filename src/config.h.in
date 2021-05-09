@@ -2,18 +2,24 @@
 #ifndef _CONFIG_H_
 #define _CONFIG_H_
 
-#define PROJECT_VERSION "@PROJECT_NAME@ v@PROJECT_VERSION@"
-#define SOURCE_REVISION "CMake/Broken"
+#define PROJECT_VERSION "@PROJECT_NAME@ @PROJECT_VERSION@"
 #define COMPILER "@CMAKE_CXX_COMPILER@"
 #define CXXFLAGS "Broken"
 
 // Features
+#cmakedefine DEBUG
+#cmakedefine DEBUGMALLOC
+#ifdef DEBUGMALLOC
+#define DEBUGMALLOC_EXTENSIONS
+#define CHECK_MEMORY
+#endif
+
 #cmakedefine HAVE_JEMALLOC 1
+#cmakedefine ENABLE_DTRACE
 
 // System headers
 #cmakedefine HAVE_CRYPT_H
 #cmakedefine HAVE_DIRENT_H 1
-#cmakedefine HAVE_EXECINFO_H 1
 #cmakedefine HAVE_TIME_H 1
 #cmakedefine HAVE_SIGNAL_H 1
 #cmakedefine HAVE_SYS_RESOURCE_H 1

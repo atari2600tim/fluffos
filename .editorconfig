@@ -3,7 +3,7 @@
 # top-most EditorConfig file
 root = true
 
-[**]
+[*]
 charset = utf-8
 end_of_line = lf
 insert_final_newline = true
@@ -15,5 +15,13 @@ indent_size = 2
 end_of_line = crlf
 
 # files in test-suite
-[**/*.crlf]
+[testsuite/**/*crlf*]
+insert_final_newline = false
 end_of_line = crlf
+
+[testsuite/**/*.lf]
+insert_final_newline = false
+end_of_line = lf
+
+[Makefile]
+indent_style = tab

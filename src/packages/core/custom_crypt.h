@@ -1,5 +1,5 @@
-#ifndef CRYPT_H
-#define CRYPT_H
+#ifndef PACKAGE_CORE_CUSTOM_CRYPT_H
+#define PACKAGE_CORE_CUSTOM_CRYPT_H
 
 /* Number of bytes in salt (raw, fully used, not printable-encoded bytes).
  * This is configurable, but don't set it too high (up to say 10). But 4
@@ -27,11 +27,5 @@
 typedef unsigned char BytE;
 
 char *custom_crypt(const char *key, const char *salt, unsigned char *rawout);
-
-int MD5Digest(BytE *, unsigned long buflen, BytE *);
-int encode(unsigned char *, BytE *, int);
-void decode(unsigned char *, BytE *, int);
-void getsalt(BytE *, BytE *);
-void crunchbuffer(BytE *buf, int *, char *, int, int);
 
 #endif

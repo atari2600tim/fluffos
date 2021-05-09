@@ -10,14 +10,21 @@
 #include "packages/core/file.h"
 #include "packages/core/call_out.h"
 #include "packages/core/outbuf.h"
+#include "packages/core/heartbeat.h"
 #ifdef PACKAGE_PARSER
 #include "packages/parser/parser.h"
+#endif
+#ifdef PACKAGE_PCRE
+#include "packages/pcre/pcre.h"
 #endif
 #ifdef PACKAGE_UIDS
 #include "packages/uids/uids.h"
 #endif
 #ifdef PACKAGE_SOCKETS
 #include "packages/sockets/socket_efuns.h"
+#endif
+#ifdef PACKAGE_DB
+#include "packages/db/db.h"
 #endif
 
 #if (defined(DEBUGMALLOC) && defined(DEBUGMALLOC_EXTENSIONS))
@@ -81,7 +88,7 @@ static const char *sources[] = {"*",
 void mark_svalue(svalue_t *sv);
 
 char *dump_debugmalloc(const char *tfn, int mask) {
-  int j, total = 0, chunks = 0, total2 = 0;
+  int j, total = 0, chunks = 0;
   const char *fn;
   md_node_t *entry;
   FILE *fp;
@@ -95,11 +102,12 @@ char *dump_debugmalloc(const char *tfn, int mask) {
   if (!fp) {
     error("Unable to open %s for writing.\n", fn);
   }
+  fprintf(fp, "%12s %12s %12s %5s %7s %s\n", "id", "gametick", "ptr", "tag", "sz", "desc");
   for (j = 0; j < MD_TABLE_SIZE; j++) {
     for (entry = table[j]; entry; entry = entry->next) {
       if (!mask || (entry->tag == mask)) {
-        fprintf(fp, "%-30s: sz %7d: id %6d: tag %08x, a %8lx\n", entry->desc, entry->size,
-                entry->id, entry->tag, (unsigned long)PTR(entry));
+        fprintf(fp, "%12d %12td %12p %1d:%03d %7d %s\n", entry->id, entry->gametick, PTR(entry),
+                (entry->tag >> 8) & 0xff, entry->tag & 0xff, entry->size, entry->desc);
         total += entry->size;
         chunks++;
       }
@@ -107,18 +115,20 @@ char *dump_debugmalloc(const char *tfn, int mask) {
   }
   fprintf(fp, "total =    %8d\n", total);
   fprintf(fp, "# chunks = %8d\n", chunks);
-  fprintf(fp, "ave. bytes per chunk = %7.2f\n\n", (float)total / chunks);
+  fprintf(fp, "ave. bytes per chunk = %7.2f\n\n", (double)total / chunks);
   fprintf(fp, "categories:\n\n");
   for (j = 0; j < MAX_CATEGORY; j++) {
-    fprintf(fp, "%4d: %10" PRIu64 "\n", j, totals[j]);
-    total2 += totals[j];
+    fprintf(fp, "%4d: %10" PRIu64 " %10" PRIu64 "\n", j, blocks[j], totals[j]);
   }
-  fprintf(fp, "\ntotal = %11d\n", total2);
+  fprintf(fp, "tags:\n\n");
+  for (j = MAX_CATEGORY + 1; j < MAX_TAGS; j++) {
+    fprintf(fp, "%4d: %10" PRIu64 " %10" PRIu64 "\n", j, blocks[j], totals[j]);
+  }
   fclose(fp);
   outbuf_addv(&out, "total =    %8d\n", total);
   outbuf_addv(&out, "# chunks = %8d\n", chunks);
   if (chunks) {
-    outbuf_addv(&out, "ave. bytes per chunk = %7.2f\n", (float)total / chunks);
+    outbuf_addv(&out, "ave. bytes per chunk = %7.2f\n", (double)total / chunks);
   }
   outbuf_fix(&out);
   return out.buffer;
@@ -204,11 +214,9 @@ void mark_svalue(svalue_t *sv) {
     case T_FUNCTION:
       sv->u.fp->hdr.extra_ref++;
       break;
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER:
       sv->u.buf->extra_ref++;
       break;
-#endif
     case T_STRING:
       switch (sv->subtype) {
         case STRING_MALLOC:
@@ -290,11 +298,9 @@ static void md_print_array(array_t *vec) {
       case T_CLASS:
         outbuf_add(&out, "<class>");
         break;
-#ifndef NO_BUFFER_TYPE
       case T_BUFFER:
         outbuf_add(&out, "<buffer>");
         break;
-#endif
       case T_FUNCTION:
         outbuf_add(&out, "<function>");
         break;
@@ -321,12 +327,12 @@ static void mark_config(void) {
   }
 }
 
-static int base_overhead = 0;
+static uint64_t base_overhead = 0;
 
 /* Compute the correct values of allocd_strings, allocd_bytes, and
  * bytes_distinct_strings based on blocks that are actually allocated.
  */
-void compute_string_totals(int *asp, int *abp, int *bp) {
+void compute_string_totals(uint64_t *asp, uint64_t *abp, uint64_t *bp) {
   int hsh;
   md_node_t *entry;
   malloc_block_t *msbl;
@@ -342,27 +348,13 @@ void compute_string_totals(int *asp, int *abp, int *bp) {
         msbl = NODET_TO_PTR(entry, malloc_block_t *);
         *bp += msbl->size + 1;
         *asp += msbl->ref;
-        *abp += msbl->ref * (msbl->size + 1);
+        *abp += (uint64_t)(msbl->ref) * (msbl->size + 1);
       }
       if (entry->tag == TAG_SHARED_STRING) {
         ssbl = NODET_TO_PTR(entry, block_t *);
         *bp += ssbl->size + 1;
         *asp += ssbl->refs;
-        *abp += ssbl->refs * (ssbl->size + 1);
-      }
-    }
-  }
-}
-
-static void dump_stralloc() {
-  md_node_t *entry;
-  fprintf(stderr, "===STRALLOC DUMP: allocd_strings: %i \n", allocd_strings);
-
-  for (int hsh = 0; hsh < MD_TABLE_SIZE; hsh++) {
-    for (entry = table[hsh]; entry; entry = entry->next) {
-      if (entry->tag == TAG_MALLOC_STRING || entry->tag == TAG_SHARED_STRING) {
-        fprintf(stderr, "%-30s: sz %7d: id %6d: tag %08x, a %8lx\n", entry->desc, entry->size,
-                entry->id, entry->tag, (unsigned long)PTR(entry));
+        *abp += (uint64_t)(ssbl->refs) * (ssbl->size + 1);
       }
     }
   }
@@ -374,10 +366,10 @@ static void dump_stralloc() {
  * are added to the outbuffer.
  */
 void check_string_stats(outbuffer_t *out) {
-  int overhead = blocks[TAG_SHARED_STRING & 0xff] * sizeof(block_t) +
-                 blocks[TAG_MALLOC_STRING & 0xff] * sizeof(malloc_block_t);
-  int num = blocks[TAG_SHARED_STRING & 0xff] + blocks[TAG_MALLOC_STRING & 0xff];
-  int bytes, as, ab;
+  uint64_t overhead = blocks[TAG_SHARED_STRING & 0xff] * sizeof(block_t) +
+                      blocks[TAG_MALLOC_STRING & 0xff] * sizeof(malloc_block_t);
+  uint64_t num = blocks[TAG_SHARED_STRING & 0xff] + blocks[TAG_MALLOC_STRING & 0xff];
+  uint64_t bytes, as, ab;
   int need_dump = 0;
 
   compute_string_totals(&as, &ab, &bytes);
@@ -390,68 +382,76 @@ void check_string_stats(outbuffer_t *out) {
   if (num != num_distinct_strings) {
     need_dump = 1;
     if (out) {
-      outbuf_addv(out, "WARNING: num_distinct_strings is: %i should be: %i\n", num_distinct_strings,
-                  num);
+      outbuf_addv(out, "WARNING: num_distinct_strings is: %" PRIu64 " should be: %" PRIu64 "\n",
+                  num_distinct_strings, num);
     } else {
-      printf("WARNING: num_distinct_strings is: %i should be: %i\n", num_distinct_strings, num);
+      printf("WARNING: num_distinct_strings is: %" PRIu64 " should be: %" PRIu64 " \n",
+             num_distinct_strings, num);
+      dump_stralloc(nullptr);
       abort();
     }
   }
   if (overhead != overhead_bytes) {
     need_dump = 1;
     if (out) {
-      outbuf_addv(out, "WARNING: overhead_bytes is: %i should be: %i\n", overhead_bytes, overhead);
+      outbuf_addv(out, "WARNING: overhead_bytes is: %" PRIu64 " should be: %" PRIu64 "\n",
+                  overhead_bytes, overhead);
     } else {
-      printf("WARNING: overhead_bytes is: %i should be: %i\n", overhead_bytes, overhead);
+      printf("WARNING: overhead_bytes is: %" PRIu64 " should be: %" PRIu64 "\n", overhead_bytes,
+             overhead);
+      dump_stralloc(nullptr);
       abort();
     }
   }
   if (bytes != bytes_distinct_strings) {
     need_dump = 1;
     if (out) {
-      outbuf_addv(out, "WARNING: bytes_distinct_strings is: %i should be: %i\n",
-                  bytes_distinct_strings, bytes - (overhead - base_overhead));
+      outbuf_addv(out, "WARNING: bytes_distinct_strings is: %" PRIu64 " should be: %" PRIu64 "\n",
+                  bytes_distinct_strings, bytes);
     } else {
-      printf("WARNING: bytes_distinct_strings is: %i should be: %i\n", bytes_distinct_strings,
-             bytes - (overhead - base_overhead));
+      printf("WARNING: bytes_distinct_strings is: %" PRIu64 " should be: %" PRIu64 "\n",
+             bytes_distinct_strings, bytes);
+      dump_stralloc(nullptr);
       abort();
     }
   }
   if (allocd_strings != as) {
     need_dump = 1;
     if (out) {
-      outbuf_addv(out, "WARNING: allocd_strings is: %i should be: %i\n", allocd_strings, as);
+      outbuf_addv(out, "WARNING: allocd_strings is: %" PRIu64 " should be: %" PRIu64 "\n",
+                  allocd_strings, as);
     } else {
-      printf("WARNING: allocd_strings is: %i should be: %i\n", allocd_strings, as);
+      printf("WARNING: allocd_strings is: %" PRIu64 " should be: %" PRIu64 "\n", allocd_strings,
+             as);
+      dump_stralloc(nullptr);
       abort();
     }
   }
   if (allocd_bytes != ab) {
     need_dump = 1;
     if (out) {
-      outbuf_addv(out, "WARNING: allocd_bytes is: %i should be: %i\n", allocd_bytes, ab);
+      outbuf_addv(out, "WARNING: allocd_bytes is: %" PRIu64 " should be: %" PRIu64 "\n",
+                  allocd_bytes, ab);
     } else {
-      printf("WARNING: allocd_bytes is: %i should be: %i\n", allocd_bytes, ab);
+      printf("WARNING: allocd_bytes is: %" PRIu64 " should be: %" PRIu64 "\n", allocd_bytes, ab);
+      dump_stralloc(nullptr);
       abort();
     }
   }
 
   if (need_dump) {
-    dump_stralloc();
+    dump_stralloc(out);
   }
 }
 
 /* currently: 1 - debug, 2 - suppress leak checks */
 void check_all_blocks(int flag) {
   int i, j, hsh;
-  int tmp;
   md_node_t *entry;
   object_t *ob;
   array_t *vec;
   mapping_t *map;
-#ifndef NO_BUFFER_TYPE
   buffer_t *buf;
-#endif
   funptr_t *fp;
   mapping_node_t *node;
   program_t *prog;
@@ -513,7 +513,7 @@ void check_all_blocks(int flag) {
           if (msbl->size != USHRT_MAX && msbl->size != strlen(str)) {
             outbuf_addv(&out,
                         "Malloc'ed string length is incorrect: %s %04x '%s': "
-                        "is: %i should be: %i\n",
+                        "is: %i should be: %" PRIu64 "\n",
                         entry->desc, entry->tag, str, msbl->size, strlen(str));
           }
           break;
@@ -538,12 +538,10 @@ void check_all_blocks(int flag) {
           fp = NODET_TO_PTR(entry, funptr_t *);
           fp->hdr.extra_ref = 0;
           break;
-#ifndef NO_BUFFER_TYPE
         case TAG_BUFFER:
           buf = NODET_TO_PTR(entry, buffer_t *);
           buf->extra_ref = 0;
           break;
-#endif
       }
     }
   }
@@ -573,7 +571,7 @@ void check_all_blocks(int flag) {
     }
     {
       int a = totals[TAG_CALL_OUT & 0xff];
-      int b = print_call_out_usage(&out, -1);
+      int b = total_callout_size();
       if (a != b) {
         outbuf_addv(&out, "WARNING: wrong number of call_out blocks allocated: %d vs %d.\n", a, b);
         print_call_out_usage(&out, 1);
@@ -611,8 +609,10 @@ void check_all_blocks(int flag) {
       outbuf_addv(&out, "WARNING: %" PRIu64 " tables for %" PRIu64 " mappings\n",
                   blocks[TAG_MAP_TBL & 0xff], num_mappings);
     if (blocks[TAG_INTERACTIVE & 0xff] != users_num(true))
-      outbuf_addv(&out, "WATNING: num_user is: %" PRIu64 " should be: %" PRIu64 "\n",
-                  users_num(true), blocks[TAG_INTERACTIVE & 0xff]);
+      outbuf_addv(&out, "WATNING: num_user is: %d should be: %" PRIu64 "\n", users_num(true),
+                  blocks[TAG_INTERACTIVE & 0xff]);
+
+    // String checks
     check_string_stats(&out);
 
 #ifdef PACKAGE_EXTERNAL
@@ -670,7 +670,7 @@ void check_all_blocks(int flag) {
       char buf[8192];
       strcpy(buf, dfm);
       strcat(buf, "\n");
-      char *target = findstring(buf);
+      const char *target = findstring(buf);
       if (target) {
         EXTRA_REF(BLOCK(target))++;
       }
@@ -682,7 +682,9 @@ void check_all_blocks(int flag) {
 #ifdef PACKAGE_MUDLIB_STATS
     mark_mudlib_stats();
 #endif
+#ifdef PACKAGE_SOCKETS
     mark_sockets();
+#endif
 #ifdef PACKAGE_PARSER
     parser_mark_verbs();
 #endif
@@ -696,6 +698,12 @@ void check_all_blocks(int flag) {
     mark_simuls();
     mark_mapping_node_blocks();
     mark_config();
+#ifdef PACKAGE_PCRE
+    mark_pcre_cache();
+#endif
+#ifdef PACKAGE_DB
+    mark_db_conn();
+#endif
 
     mark_svalue(&apply_ret_value);
 
@@ -888,6 +896,11 @@ void check_all_blocks(int flag) {
             break;
           case TAG_FUNP:
             fp = NODET_TO_PTR(entry, funptr_t *);
+            if (fp->hdr.owner && (strcmp(fp->hdr.owner->obname, "single/tests/efuns/async") == 0 ||
+                                  strcmp(fp->hdr.owner->obname, "single/tests/efuns/db") == 0)) {
+              // Async package mark doesn't work yet.
+              break;
+            }
             if (fp->hdr.ref != fp->hdr.extra_ref) {
               outbuf_addv(&out,
                           "Bad ref count for function pointer (owned by %s), "
@@ -896,7 +909,6 @@ void check_all_blocks(int flag) {
                           fp->hdr.extra_ref);
             }
             break;
-#ifndef NO_BUFFER_TYPE
           case TAG_BUFFER:
             buf = NODET_TO_PTR(entry, buffer_t *);
             if (buf->ref != buf->extra_ref) {
@@ -904,7 +916,6 @@ void check_all_blocks(int flag) {
                           buf->extra_ref);
             }
             break;
-#endif
           case TAG_PREDEFINES:
             outbuf_addv(&out, "WARNING: Found orphan predefine: %s %04x\n", entry->desc,
                         entry->tag);
@@ -922,15 +933,15 @@ void check_all_blocks(int flag) {
                         entry->tag);
             break;
           case TAG_UID:
-              // not sure this is still relevant with the change in data structure
-              /*
-            outbuf_addv(&out, "WARNING: Found orphan uid node: %s %04x\n", entry->desc, entry->tag);
-            */
+            // not sure this is still relevant with the change in data structure
+            /*
+          outbuf_addv(&out, "WARNING: Found orphan uid node: %s %04x\n", entry->desc, entry->tag);
+          */
             break;
           case TAG_SENTENCE:
             sent = NODET_TO_PTR(entry, sentence_t *);
             outbuf_addv(&out, "WARNING: Found orphan sentence: %s:%s - %s %04x\n", sent->ob->obname,
-                        sent->function, entry->desc, entry->tag);
+                        sent->function.s, entry->desc, entry->tag);
             break;
           case TAG_PERM_IDENT:
             outbuf_addv(&out, "WARNING: Found orphan permanent identifier: %s %04x\n", entry->desc,
@@ -946,6 +957,11 @@ void check_all_blocks(int flag) {
             /* don't give an error for the return value we are
                constructing :) */
             if (msbl == MSTR_BLOCK(out.buffer)) {
+              break;
+            }
+
+            // ignore the current executing command
+            if (starts_with(entry->desc, "current_command:")) {
               break;
             }
 
@@ -976,8 +992,9 @@ void check_all_blocks(int flag) {
             outbuf_addv(&out, "WARNING: Found orphan mapping node block: %s %04x\n", entry->desc,
                         entry->tag);
             break;
-          /* FIXME: need to account these. */
           case TAG_PERMANENT: /* only save_object|resotre_object uses this */
+            break;
+            /* FIXME: need to account these. */
           case TAG_INC_LIST:
           case TAG_IDENT_TABLE:
           case TAG_OBJ_TBL:
@@ -1002,9 +1019,9 @@ void check_all_blocks(int flag) {
     outbuf_add(&out, "\n\n");
     outbuf_add(&out, "      source                    blks   total\n");
     outbuf_add(&out, "------------------------------ ------ --------\n");
-    for (i = 1; i < MAX_CATEGORY; i++) {
+    for (i = 1; i < MAX_TAGS; i++) {
       if (totals[i]) {
-        outbuf_addv(&out, "%-30s %6d %8d\n", sources[i], blocks[i], totals[i]);
+        outbuf_addv(&out, "%-30s %6" PRIu64 " %8" PRIu64 "\n", sources[i], blocks[i], totals[i]);
       }
       if (i == 5) {
         outbuf_add(&out, "\n");

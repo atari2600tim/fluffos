@@ -1,34 +1,38 @@
+#include "base/internal/port.h"
+
+#include "base/internal/rc.h"
+#include "base/internal/rusage.h"
+#include "config.h"
+
 #include <random>
-#include <sys/resource.h>
-#if 0
-#ifdef TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
-#else
-# ifdef HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
-#endif
-#else
-# include <sys/time.h>
-#endif
 #include <unistd.h>
 
 // Returns a pseudo-random number in the range 0 .. n-1
 int64_t random_number(int64_t n) {
-  static bool called = 0;
+  static bool called = false;
   static std::mt19937_64 engine;
 
   if (!called) {
     std::random_device rd;
     engine.seed(rd());
-    called = 1;
+    called = true;
   }
 
   std::uniform_int_distribution<int64_t> dist(0, n - 1);
   return dist(engine);
+}
+
+// Returns a secure random number in the range 0 .. n-1
+int64_t secure_random_number(int64_t n) {
+#ifdef __WIN32
+  // On windows we trust default, since we use MINGW which is pretty recent
+  static std::random_device rd;
+#else
+  // On linux & osx we use urandom by default
+  static std::random_device rd("/dev/urandom");
+#endif
+  std::uniform_int_distribution<int64_t> dist(0, n - 1);
+  return dist(rd);
 }
 
 /*
@@ -40,35 +44,28 @@ int64_t random_number(int64_t n) {
  * of seconds since 1970.
  */
 
-long get_current_time() { return time(0l); /* Just use the old time() for now */ }
-
-const char *time_string(time_t t) {
-  const char *res = ctime(&t);
-  if (!res) {
-    res = "ctime failed";
-  }
-  return res;
-}
+time_t get_current_time() { return time(nullptr); /* Just use the old time() for now */ }
 
 /*
  * Get a microsecond clock sample.
  */
 void get_usec_clock(long *sec, long *usec) {
-  struct timeval tv;
+  struct timeval tv {};
 
-  gettimeofday(&tv, NULL);
+  gettimeofday(&tv, nullptr);
   *sec = tv.tv_sec;
   *usec = tv.tv_usec;
 }
 
 long get_cpu_times(unsigned long *secs, unsigned long *usecs) {
-  struct rusage rus;
+  struct rusage rus {};
 
   if (getrusage(RUSAGE_SELF, &rus) < 0) {
     return 0;
   }
   *secs = rus.ru_utime.tv_sec + rus.ru_stime.tv_sec;
   *usecs = rus.ru_utime.tv_usec + rus.ru_stime.tv_usec;
+
   return 1;
 }
 

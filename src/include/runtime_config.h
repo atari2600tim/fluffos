@@ -14,8 +14,8 @@
 #ifndef RUNTIME_CONFIG_H
 #define RUNTIME_CONFIG_H
 
-#define BASE_CONFIG_STR 0
-#define CFG_STR(x) ((x) + BASE_CONFIG_STR)
+#define RC_BASE_CONFIG_STR 0
+#define CFG_STR(x) ((x) + RC_BASE_CONFIG_STR)
 /*
  * These config settings return a string
  */
@@ -35,12 +35,14 @@
 #define __DEFAULT_FAIL_MESSAGE__ CFG_STR(12)
 #define __GLOBAL_INCLUDE_FILE__ CFG_STR(13)
 #define __MUD_IP__ CFG_STR(14)
+#define __RC_WEBSOCKET_HTTP_DIR__ CFG_STR(15)
 
+#define RC_LAST_CONFIG_STR CFG_STR(255)
 /*
  * These config settings return an int (ie number)
  */
-#define BASE_CONFIG_INT (BASE_CONFIG_STR + 15)
-#define CFG_INT(x) ((x) + BASE_CONFIG_INT)
+#define RC_BASE_CONFIG_INT (RC_LAST_CONFIG_STR + 1)
+#define CFG_INT(x) ((x) + RC_BASE_CONFIG_INT)
 
 #define __MUD_PORT__ CFG_INT(0)
 #define __RC_INT_1__ CFG_INT(1)
@@ -99,6 +101,12 @@
 #define __RC_SPRINTF_ADD_JUSTFIED_IGNORE_ANSI_COLORS__ CFG_INT(54)
 #define __RC_APPLY_CACHE_BITS__ CFG_INT(55)
 #define __RC_CALL_OUT_ZERO_NEST_LEVEL__ CFG_INT(56)
+#define __RC_TRACE_CONTEXT__ CFG_INT(57)
+#define __RC_TRACE_INSTR__ CFG_INT(58)
+#define __RC_ENABLE_MXP__ CFG_INT(59)
+#define __RC_ENABLE_GMCP__ CFG_INT(60)
+#define __RC_ENABLE_ZMP__ CFG_INT(61)
+#define __RC_ENABLE_MSSP__ CFG_INT(62)
 
-#define RUNTIME_CONFIG_NEXT CFG_INT(100)
+#define RC_LAST_CONFIG_INT CFG_INT(255)
 #endif /* RUNTIME_CONFIG_H */

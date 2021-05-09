@@ -2,6 +2,7 @@
 #define PROGRAM_H
 
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 
 /*
@@ -161,7 +162,7 @@ typedef struct {
 #endif
 
 struct function_t {
-  char *funcname;
+  const char *funcname;
   unsigned short type;
   unsigned char num_arg;
   unsigned char num_local;
@@ -172,7 +173,7 @@ struct function_t {
 };
 
 typedef struct {
-  char *name;
+  const char *name;
   unsigned short type; /* Type of variable. See above. TYPE_ */
 } variable_t;
 
@@ -188,6 +189,7 @@ struct lookup_entry_s {
   struct function_t *funp;
   unsigned short function_index_offset;
   unsigned short variable_index_offset;
+  unsigned short runtime_index;
 };
 
 struct program_t {
@@ -214,15 +216,15 @@ struct program_t {
   inherit_t *inherit;             /* List of inherited prgms */
   int total_size;                 /* Sum of all data in this struct */
                                   /*
-* The types of function arguments are saved where 'argument_types'
-* points. It can be a variable number of arguments, so allocation is
-* done dynamically. To know where first argument is found for function
-* 'n' (number of function), use 'type_start[n]'. These two arrays will
-* only be allocated if '#pragma save_types' has been specified. This
-* #pragma should be specified in files that are commonly used for
-* inheritance. There are several lines of code that depends on the type
-* length (16 bits) of 'type_start' (sorry !).
-*/
+                                   * The types of function arguments are saved where 'argument_types'
+                                   * points. It can be a variable number of arguments, so allocation is
+                                   * done dynamically. To know where first argument is found for function
+                                   * 'n' (number of function), use 'type_start[n]'. These two arrays will
+                                   * only be allocated if '#pragma save_types' has been specified. This
+                                   * #pragma should be specified in files that are commonly used for
+                                   * inheritance. There are several lines of code that depends on the type
+                                   * length (16 bits) of 'type_start' (sorry !).
+                                   */
   unsigned short *argument_types;
 #define INDEX_START_NONE 65535
   unsigned short *type_start;
@@ -230,7 +232,7 @@ struct program_t {
    * And now some general size information.
    */
   unsigned short heart_beat;   /* Index of the heart beat function. 0 means
-                                  * no heart beat */
+                                * no heart beat */
   unsigned short program_size; /* size of this instruction code */
   unsigned short num_classes;
   unsigned short num_functions_defined;
@@ -246,10 +248,8 @@ struct program_t {
   // Key: pointer of function name (must be shared-string)
   // Value: lookup_entry_s.
   //
-  // TODO: we need to use pointer here because compiler.c use malloc
-  // directly to allocate memory for program, which doesn't work for STL containers.
-  // This value is new'ed in apply_cache.cc and deallocated on deallocate_program.
-  std::unordered_map<intptr_t, lookup_entry_s> *apply_lookup_table;
+  typedef std::unordered_map<intptr_t, lookup_entry_s> apply_lookup_table_type;
+  std::unique_ptr<apply_lookup_table_type> apply_lookup_table;
 };
 
 void reference_prog(program_t *, const char *);

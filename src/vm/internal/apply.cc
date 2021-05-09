@@ -5,10 +5,11 @@
 #include <algorithm>  // for std::min
 #include <cstdio>     // for sprintf
 
+#include "base/internal/tracing.h"
 #include "vm/internal/base/apply_cache.h"
 #include "vm/internal/base/machine.h"
-#include "vm/internal/compiler/compiler.h"
-#include "vm/internal/compiler/lex.h"
+#include "compiler/internal/compiler.h"
+#include "compiler/internal/lex.h"
 
 // global static result
 svalue_t apply_ret_value;
@@ -156,6 +157,8 @@ void check_co_args(int num_arg, const program_t *prog, function_t *fun, int find
  */
 
 int apply_low(const char *fun, object_t *ob, int num_arg) {
+  ScopedTracer _tracer(__PRETTY_FUNCTION__);
+
   int local_call_origin = call_origin;
 
 #ifdef DEBUG
@@ -168,9 +171,9 @@ int apply_low(const char *fun, object_t *ob, int num_arg) {
   call_origin = 0;
   ob->time_of_ref = g_current_gametick; /* Used by the swapper */
                                         /*
-* This object will now be used, and is thus a target for reset later on
-* (when time due).
-*/
+                                         * This object will now be used, and is thus a target for reset later on
+                                         * (when time due).
+                                         */
   if (!CONFIG_INT(__RC_NO_RESETS__) && CONFIG_INT(__RC_LAZY_RESETS__)) {
     try_reset(ob);
   }
@@ -215,10 +218,7 @@ retry_for_shadow:
     int need;
     function_t *funp = entry.funp;
     int findex = (funp - entry.progp->function_table);
-    int funflags, runtime_index;
-
-    runtime_index = findex + entry.progp->last_inherited + entry.function_index_offset;
-    funflags = ob->prog->function_flags[runtime_index];
+    int funflags = ob->prog->function_flags[entry.runtime_index];
 
     need = (local_call_origin == ORIGIN_DRIVER
                 ? DECL_HIDDEN
@@ -258,15 +258,6 @@ retry_for_shadow:
     } else {
       setup_variables(csp->num_local_variables, funp->num_local, funp->num_arg);
     }
-    if (CONFIG_INT(__RC_TRACE__)) {
-      tracedepth++;
-      if (TRACEP(TRACE_CALL)) {
-        do_trace_call(findex);
-      }
-    }
-#ifdef DTRACE
-    DTRACE_PROBE3(fluffos, lpc__entry, ob->obname, fun, current_prog->filename);
-#endif
     /* Call the program */
     previous_ob = current_object;
     current_object = ob;
@@ -294,24 +285,13 @@ svalue_t *apply(const char *fun, object_t *ob, int num_arg, int where) {
   svalue_t *expected_sp;
 #endif
 
-  tracedepth = 0;
   call_origin = where;
 
-  if (CONFIG_INT(__RC_TRACE__)) {
-    if (TRACEP(TRACE_APPLY)) {
-      static int inapply = 0;
-      if (!inapply) {
-        inapply = 1;
-        do_trace("Apply", "", "\n");
-        inapply = 0;
-      }
-    }
-  }
 #ifdef DEBUG
   expected_sp = sp - num_arg;
 #endif
   if (apply_low(fun, ob, num_arg) == 0) {
-    return 0;
+    return nullptr;
   }
   free_svalue(&apply_ret_value, "sapply");
   apply_ret_value = *sp--;
@@ -331,19 +311,19 @@ svalue_t *safe_apply(const char *fun, object_t *ob, int num_arg, int where) {
 
   if (ob->flags & O_DESTRUCTED) {
     pop_n_elems(num_arg);
-    return 0;
+    return nullptr;
   }
 
   error_context_t econ;
   save_context(&econ);
 
-  svalue_t *ret = 0;
+  svalue_t *ret = nullptr;
   try {
     ret = apply(fun, ob, num_arg, where);
   } catch (const char *) {
     restore_context(&econ);
     pop_n_elems(num_arg);
-    ret = 0;
+    ret = nullptr;
   }
   pop_context(&econ);
   return ret;

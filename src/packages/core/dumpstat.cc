@@ -83,11 +83,9 @@ static int svalue_size(svalue_t *v) {
       depth--;
       return total;
     }
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER:
       /* first byte is stored inside the buffer struct */
       return sizeof(buffer_t) + v->u.buf->size - 1;
-#endif
     default:
         // some freed value or a reference (!) to one (in all my test cases
         // anyway), it will be removed by reclaim_objects later, Wodan
@@ -151,7 +149,7 @@ void dumpstat(const char *tfn) {
     } else {
       tmp = 0;
     }
-    fprintf(f, "%-20s %ld ref %2d %s %s (%d)\n", ob->obname, tmp + data_size(ob) + sizeof(object_t),
+    fprintf(f, "%-20s %zu ref %2d %s %s (%d)\n", ob->obname, tmp + data_size(ob) + sizeof(object_t),
             ob->ref, ob->flags & O_HEART_BEAT ? "HB" : "  ",
 #ifndef NO_ENVIRONMENT
             ob->super ? ob->super->obname : "--",

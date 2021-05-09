@@ -42,7 +42,7 @@ namespace {
 int new_call_out_zero_last_gametick = 0;
 // Total number of call_out(0) that was scheduled on this gametick.
 int new_call_out_zero_scheduled_on_this_gametick = 0;
-}
+}  // namespace
 
 /*
  * Free a call out structure.
@@ -54,17 +54,17 @@ static void free_called_call(pending_call_t *cop) {
   } else {
     free_funp(cop->function.f);
   }
-  cop->ob = NULL;
-  cop->function.s = NULL;
+  cop->ob = nullptr;
+  cop->function.s = nullptr;
   if (CONFIG_INT(__RC_THIS_PLAYER_IN_CALL_OUT__)) {
     if (cop->command_giver) {
       free_object(&cop->command_giver, "free_call");
-      cop->command_giver = 0;
+      cop->command_giver = nullptr;
     }
   }
-  if (cop->tick_event != NULL) {
+  if (cop->tick_event != nullptr) {
     cop->tick_event->valid = false;  // Will be freed by tick loop itself.
-    cop->tick_event = NULL;
+    cop->tick_event = nullptr;
   }
   FREE(cop);
 }
@@ -81,7 +81,7 @@ static void free_call(pending_call_t *cop) {
  */
 LPC_INT new_call_out(object_t *ob, svalue_t *fun, std::chrono::milliseconds delay_msecs,
                      int num_args, svalue_t *arg, bool walltime) {
-  DBG_CALLOUT("new_call_out: /%s delay msecs %ld\n", ob->obname, delay_msecs.count());
+  DBG_CALLOUT("new_call_out: /%s delay msecs %" PRId64 "\n", ob->obname, delay_msecs.count());
 
   // call_out(0) loop prevention. This is based on the fact that new call_out(0)
   // will be executed on the same gametick, and when the total exceed the limit
@@ -101,7 +101,7 @@ LPC_INT new_call_out(object_t *ob, svalue_t *fun, std::chrono::milliseconds dela
     }
   }
 
-  pending_call_t *cop = reinterpret_cast<pending_call_t *>(
+  auto *cop = reinterpret_cast<pending_call_t *>(
       DCALLOC(1, sizeof(pending_call_t), TAG_CALL_OUT, "new_call_out"));
 
   cop->is_walltime = walltime;
@@ -115,7 +115,7 @@ LPC_INT new_call_out(object_t *ob, svalue_t *fun, std::chrono::milliseconds dela
     cop->target_time = g_current_gametick + time_to_gametick(delay_msecs);
   }
   DBG_CALLOUT("  is_walltime: %d\n", cop->is_walltime ? 1 : 0);
-  DBG_CALLOUT("  target_time: %lu\n", cop->target_time);
+  DBG_CALLOUT("  target_time: %" PRIu64 "\n", cop->target_time);
 
   if (fun->type == T_STRING) {
     DBG_CALLOUT("  function: %s\n", fun->u.string);
@@ -126,7 +126,7 @@ LPC_INT new_call_out(object_t *ob, svalue_t *fun, std::chrono::milliseconds dela
     DBG_CALLOUT("  function: <function>\n");
     cop->function.f = fun->u.fp;
     fun->u.fp->hdr.ref++;
-    cop->ob = 0;
+    cop->ob = nullptr;
   }
 
   cop->handle = g_current_gametick + (++unique);
@@ -149,10 +149,10 @@ LPC_INT new_call_out(object_t *ob, svalue_t *fun, std::chrono::milliseconds dela
     cop->vs = allocate_empty_array(num_args);
     memcpy(cop->vs->item, arg, sizeof(svalue_t) * num_args);
   } else {
-    cop->vs = 0;
+    cop->vs = nullptr;
   }
 
-  auto callback = std::bind(call_out, cop);
+  auto callback = [=] { return call_out(cop); };
   if (walltime) {
     cop->tick_event = add_walltime_event(delay_msecs, tick_event::callback_type(callback));
   } else {
@@ -167,22 +167,21 @@ LPC_INT new_call_out(object_t *ob, svalue_t *fun, std::chrono::milliseconds dela
  * be living objects.
  */
 void call_out(pending_call_t *cop) {
-  current_interactive = 0;
+  current_interactive = nullptr;
 
   object_t *ob, *new_command_giver;
   ob = (cop->ob ? cop->ob : cop->function.f->hdr.owner);
 
   DBG_CALLOUT("Executing callout: %s\n", ob ? ob->obname : "(null)");
 
-  DBG_CALLOUT("  handle: %ld\n", cop->handle);
+  DBG_CALLOUT("  handle: %" LPC_INT_FMTSTR_P "\n", cop->handle);
   DBG_CALLOUT("  is_walltime: %i\n", cop->is_walltime ? 1 : 0);
 
-  DBG_CALLOUT("  target_time: %lu vs current: %lu\n", cop->target_time,
-              cop->is_walltime
-                  ? std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::high_resolution_clock::now().time_since_epoch())
-                        .count()
-                  : g_current_gametick);
+  DBG_CALLOUT("  target_time: %" PRIu64 " vs current: %" PRIu64 "\n", cop->target_time,
+              cop->is_walltime ? std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::high_resolution_clock::now().time_since_epoch())
+                                     .count()
+                               : g_current_gametick);
 
   // Remove self from callout map
   {
@@ -210,7 +209,7 @@ void call_out(pending_call_t *cop) {
     }
   }
 #endif
-  new_command_giver = 0;
+  new_command_giver = nullptr;
   if (CONFIG_INT(__RC_THIS_PLAYER_IN_CALL_OUT__)) {
     if (cop->command_giver && !(cop->command_giver->flags & O_DESTRUCTED)) {
       new_command_giver = cop->command_giver;
@@ -258,10 +257,9 @@ void call_out(pending_call_t *cop) {
 
 static int time_left(pending_call_t *cop) {
   if (cop->is_walltime) {
-    return (cop->target_time -
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::high_resolution_clock::now().time_since_epoch())
-                .count()) /
+    return (cop->target_time - std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::high_resolution_clock::now().time_since_epoch())
+                                   .count()) /
            1000;
   } else {
     return std::chrono::duration_cast<std::chrono::seconds>(
@@ -388,24 +386,31 @@ int print_call_out_usage(outbuffer_t *ob, int verbose) {
   if (verbose == 1) {
     outbuf_add(ob, "Call out information:\n");
     outbuf_add(ob, "---------------------\n");
-    outbuf_addv(ob, "Number of allocated call outs: %8d, %8d bytes.\n", g_callout_handle_map.size(),
-                g_callout_handle_map.size() * sizeof(pending_call_t));
-    outbuf_addv(ob, "Current handle map bucket: %d\n", g_callout_handle_map.bucket_count());
+    outbuf_addv(ob, "Number of allocated call outs: %8" PRIu64 ", %8" PRIu64 " bytes.\n",
+                g_callout_handle_map.size(), g_callout_handle_map.size() * sizeof(pending_call_t));
+    outbuf_addv(ob, "Current handle map bucket: %" PRIu64 "\n",
+                g_callout_handle_map.bucket_count());
     outbuf_addv(ob, "Current handle map load_factor: %f\n", g_callout_handle_map.load_factor());
-    outbuf_addv(ob, "Current object map bucket: %d\n", g_callout_object_handle_map.bucket_count());
+    outbuf_addv(ob, "Current object map bucket: %" PRIu64 "\n",
+                g_callout_object_handle_map.bucket_count());
     outbuf_addv(ob, "Current object map load_factor: %f\n",
                 g_callout_object_handle_map.load_factor());
-    outbuf_addv(ob, "Number of garbage entry in object map: %d\n",
+    outbuf_addv(ob, "Number of garbage entry in object map: %" PRIu64 "\n",
                 g_callout_object_handle_map.size() - g_callout_handle_map.size());
   } else {
     if (verbose != -1) {
-      outbuf_addv(ob, "call out:\t\t\t%8d %8d (load_factor %f)\n", g_callout_handle_map.size(),
-                  g_callout_handle_map.size() * sizeof(pending_call_t),
-                  g_callout_handle_map.load_factor());
+      outbuf_addv(ob, "%-20s %8" PRIu64 " %8" PRIu64 " (buckets %zu)\n", "call out",
+                  g_callout_handle_map.size(), g_callout_handle_map.size() * sizeof(pending_call_t),
+                  g_callout_handle_map.bucket_count());
     }
   }
-  return g_callout_handle_map.size() * sizeof(pending_call_t);
+  return g_callout_handle_map.size() *
+             (sizeof(LPC_INT) + sizeof(pending_call_t *) + sizeof(pending_call_t)) +
+         g_callout_handle_map.size() * (sizeof(object_t *) + sizeof(LPC_INT));
 }
+
+// only used in checkmemory
+int total_callout_size() { return g_callout_handle_map.size() * sizeof(pending_call_t); }
 
 #ifdef DEBUGMALLOC_EXTENSIONS
 void mark_call_outs() {
@@ -437,8 +442,8 @@ void mark_call_outs() {
  */
 array_t *get_all_call_outs() {
   int i = 0;
-  for (auto iter = g_callout_handle_map.cbegin(); iter != g_callout_handle_map.cend(); iter++) {
-    auto cop = iter->second;
+  for (auto iter : g_callout_handle_map) {
+    auto cop = iter.second;
     object_t *ob = (cop->ob ? cop->ob : cop->function.f->hdr.owner);
     if (ob && !(ob->flags & O_DESTRUCTED)) {
       i++;
@@ -448,8 +453,8 @@ array_t *get_all_call_outs() {
   array_t *v = allocate_empty_array(i);
 
   i = 0;
-  for (auto iter = g_callout_handle_map.cbegin(); iter != g_callout_handle_map.cend(); iter++) {
-    auto cop = iter->second;
+  for (auto iter : g_callout_handle_map) {
+    auto cop = iter.second;
     array_t *vv;
     object_t *ob;
     ob = (cop->ob ? cop->ob : cop->function.f->hdr.owner);
@@ -469,7 +474,7 @@ array_t *get_all_call_outs() {
       svalue_t tmpval;
 
       tmpbuf.real_size = 0;
-      tmpbuf.buffer = 0;
+      tmpbuf.buffer = nullptr;
 
       tmpval.type = T_FUNCTION;
       tmpval.u.fp = cop->function.f;
@@ -571,11 +576,11 @@ void reclaim_call_outs() {
 
   if (CONFIG_INT(__RC_THIS_PLAYER_IN_CALL_OUT__)) {
     i = 0;
-    for (auto iter = g_callout_handle_map.cbegin(); iter != g_callout_handle_map.cend(); iter++) {
-      auto cop = iter->second;
+    for (auto iter : g_callout_handle_map) {
+      auto cop = iter.second;
       if (cop->command_giver && (cop->command_giver->flags & O_DESTRUCTED)) {
         free_object(&cop->command_giver, "reclaim_call_outs");
-        cop->command_giver = 0;
+        cop->command_giver = nullptr;
         i++;
       }
     }
@@ -617,7 +622,7 @@ inline void int_call_out(bool walltime) {
   free_svalue(sp, "call_out");
   put_number(ret);
 }
-}
+}  // namespace
 
 #ifdef F_CALL_OUT
 void f_call_out(void) { int_call_out(false); }

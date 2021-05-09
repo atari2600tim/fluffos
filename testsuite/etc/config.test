@@ -11,15 +11,15 @@ name : Testsuite
 
 # port number to accept users on
 port number : 4000
+external_port_2: websocket 4001
+
+websocket http dir : ../src/www
 
 # Restrict IP binding, if omitted, bind to all addresses.
-mud ip : 127.0.0.1
+mud ip : 0.0.0.0
 
 # absolute pathname of mudlib
-mudlib directory : ./
-
-# absolute pathname of driver/config dir
-binary directory : ./
+mudlib directory : ./ # test #
 
 # debug.log and author/domain stats are stored here
 log directory : /log
@@ -28,17 +28,11 @@ log directory : /log
 # for multiple dirs, separate each path with a ':'
 include directories : /include
 
-# Directory to save binaries in.  (if BINARIES is defined)
-save binaries directory : /binaries
-
 # the file which defines the master object
 master file : /single/master
 
 # the file where all global simulated efuns are defined.
 simulated efun file : /single/simul_efun
-
-# file to swap out objects; not used if time to swap is 0
-swap file : /etc/swapfile
 
 # alternate debug.log file name (assumed to be in specified 'log directory')
 debug log file : debug.log
@@ -91,7 +85,7 @@ maximum string length : 200000
 # Max size of a file allowed to be read by 'read_file()'.
 maximum read file size : 200000
 
-# max number of bytes you allow to be read and written with read_bytes 
+# max number of bytes you allow to be read and written with read_bytes
 # and write_bytes
 maximum byte transfer : 10000
 
@@ -245,6 +239,12 @@ trace : 1
 #
 trace code : 0
 
+# TRACE: set this to 1 to collect context information during LPC traces.
+trace lpc execution context : 0
+g
+# TRACE: set this to 1 to collect LPC instruction information during LPC traces.
+trace lpc instructions : 0
+
 # INTERACTIVE_CATCH_TELL: define this if you want catch_tell called on
 #   interactives as well as NPCs.  If this is defined, user.c will need a
 #   catch_tell(msg) method that calls receive(msg);
@@ -338,12 +338,18 @@ enable_commands call init : 0
 #
 sprintf add_justified ignore ANSI colors : 1
 
-# call_out(0) loop prvention:
+# call_out(0) loop prevention:
 #
 # This is the number of call_out(.., 0) call can be scheduled on the same
 # gametick.
 #
 call_out(0) nest level : 10
+
+# telnet extensions support
+enable mxp : 1
+enable gmcp : 1
+enable zmp : 1
+enable mssp : 1
 
 ###############################################################################
 #          The following aren't currently used or implemented (yet)           #

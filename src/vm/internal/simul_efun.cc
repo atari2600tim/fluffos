@@ -5,9 +5,10 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "vm/internal/apply.h"
 #include "vm/internal/base/machine.h"
 #include "vm/internal/simulate.h"
-#include "vm/internal/compiler/lex.h"  // for ident_hash_elem_t etc, fix me!
+#include "compiler/internal/lex.h"  // for ident_hash_elem_t etc, fix me!
 
 /*
  * This file rewritten by Beek because it was inefficient and slow.  We
@@ -26,12 +27,12 @@
  */
 
 struct simul_entry {
-  char *name;
+  const char *name;
   short index;
 };
 
-simul_entry *simul_names = 0;
-function_lookup_info_t *simuls = 0;
+simul_entry *simul_names = nullptr;
+function_lookup_info_t *simuls = nullptr;
 int num_simul_efun = 0;
 object_t *simul_efun_ob;
 
@@ -57,7 +58,7 @@ void init_simul_efun(const char *file) {
   object_t *new_ob;
 
   if (!file || !file[0]) {
-    fprintf(stderr, "No simul_efun\n");
+    debug_message("No simul_efun\n");
     return;
   }
   if (!filename_to_obname(file, buf, sizeof buf)) {
@@ -69,8 +70,8 @@ void init_simul_efun(const char *file) {
   }
 
   new_ob = load_object(buf, 1);
-  if (new_ob == 0) {
-    fprintf(stderr, "The simul_efun file %s was not loaded.\n", buf);
+  if (new_ob == nullptr) {
+    debug_message("The simul_efun file %s was not loaded.\n", buf);
     exit(-1);
   }
   set_simul_efun(new_ob);
@@ -82,7 +83,7 @@ static void remove_simuls() {
   /* inactivate all old simul_efuns */
   for (i = 0; i < num_simul_efun; i++) {
     simuls[i].index = 0;
-    simuls[i].func = 0;
+    simuls[i].func = nullptr;
   }
   for (i = 0; i < num_simul_efun; i++) {
     if ((ihe = lookup_ident(simul_names[i].name))) {
@@ -194,11 +195,6 @@ void call_simul_efun(unsigned short index, int num_arg) {
   }
 
   if (simuls[index].func) {
-    if (CONFIG_INT(__RC_TRACE__)) {
-      if (TRACEP(TRACE_CALL_OTHER)) {
-        do_trace("simul_efun ", simuls[index].func->funcname, "\n");
-      }
-    }
     /* Don't need to use apply() since we have the pointer directly;
      * this saves function lookup.
      */

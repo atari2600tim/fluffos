@@ -3,88 +3,87 @@ layout: default
 title: lpc
 ---
 
-Auto generated on 2018-12-30 16:19:49 STD for [e555ec1](https://github.com/fluffos/fluffos/tree/e555ec1).
 
-### constructs
+<h2 class="border-bottom py-3 text-uppercase">
+  <img src="https://cdnjs.cloudflare.com/ajax/libs/octicons/8.5.0/svg/bookmark.svg"><a class='text-secondary' name="constructs" href="#constructs">constructs</a>
+</h2>
 
-<table class='table table-condensed'>
-<tr>
-<td>
-<a href='constructs/for.html'>for</a>
-</td>
-<td>
-<a href='constructs/function.html'>function</a>
-</td>
-<td>
-<a href='constructs/if.html'>if</a>
-</td>
-<td>
-<a href='constructs/include.html'>include</a>
-</td>
-<td>
-<a href='constructs/inherit.html'>inherit</a>
-</td>
-</tr>
-<tr>
-<td>
-<a href='constructs/prototypes.html'>prototypes</a>
-</td>
-<td>
-<a href='constructs/switch.html'>switch</a>
-</td>
-<td>
-<a href='constructs/while.html'>while</a>
-</td>
-<td></td>
-<td></td>
-</tr>
-</table>
-### preprocessor
-<table class='table table-condensed'>
-<tr>
-<td>
-<a href='preprocessor/README.html'>README</a>
-</td>
-<td>
-<a href='preprocessor/define.html'>define</a>
-</td>
-<td>
-<a href='preprocessor/include.html'>include</a>
-</td>
-<td></td>
-<td></td>
-</tr>
-</table>
-### types
-<table class='table table-condensed'>
-<tr>
-<td>
-<a href='types/array.html'>array</a>
-</td>
-<td>
-<a href='types/buffer.html'>buffer</a>
-</td>
-<td>
-<a href='types/float.html'>float</a>
-</td>
-<td>
-<a href='types/function.html'>function</a>
-</td>
-<td>
-<a href='types/general.html'>general</a>
-</td>
-</tr>
-<tr>
-<td>
-<a href='types/mappings.html'>mappings</a>
-</td>
-<td>
-<a href='types/strings.html'>strings</a>
-</td>
-<td>
-<a href='types/substructures.html'>substructures</a>
-</td>
-<td></td>
-<td></td>
-</tr>
-</table>
+<div class='row'>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='constructs/for.html'>for</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='constructs/function.html'>function</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='constructs/if.html'>if</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='constructs/include.html'>include</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='constructs/inherit.html'>inherit</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='constructs/prototypes.html'>prototypes</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='constructs/switch.html'>switch</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='constructs/while.html'>while</a></div>
+</div>
+</div>
+
+<h2 class="border-bottom py-3 text-uppercase">
+  <img src="https://cdnjs.cloudflare.com/ajax/libs/octicons/8.5.0/svg/bookmark.svg"><a class='text-secondary' name="preprocessor" href="#preprocessor">preprocessor</a>
+</h2>
+
+<div class='row'>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='preprocessor/README.html'>README</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='preprocessor/define.html'>define</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='preprocessor/include.html'>include</a></div>
+</div>
+</div>
+
+<h2 class="border-bottom py-3 text-uppercase">
+  <img src="https://cdnjs.cloudflare.com/ajax/libs/octicons/8.5.0/svg/bookmark.svg"><a class='text-secondary' name="types" href="#types">types</a>
+</h2>
+
+<div class='row'>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='types/array.html'>array</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='types/buffer.html'>buffer</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='types/float.html'>float</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='types/function.html'>function</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='types/general.html'>general</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='types/mappings.html'>mappings</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='types/strings.html'>strings</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='types/substructures.html'>substructures</a></div>
+</div>
+</div>
+
+<div class="alert alert-info my-4" role="alert">
+    <img src="https://cdnjs.cloudflare.com/ajax/libs/octicons/8.5.0/svg/info.svg">
+    This page is auto generated on 2021-04-23 11:46:43 CST for v2019.20210324-14-g0a8fc22e-dirty.</a>
+</div>
+

@@ -1,5 +1,6 @@
 #include "base/package_api.h"
 
+#include "packages/core/file.h"
 #include "packages/core/sprintf.h"
 #include "packages/core/outbuf.h"
 
@@ -51,7 +52,7 @@ void f_debug_info(void) {
 #ifndef NO_LIGHT
       outbuf_addv(&out, "total light : %d\n", ob->total_light);
 #endif
-      outbuf_addv(&out, "time_of_ref : %d\n", ob->time_of_ref);
+      outbuf_addv(&out, "time_of_ref : %" PRIu64 "\n", ob->time_of_ref);
       outbuf_addv(&out, "ref         : %d\n", ob->ref);
 #ifdef DEBUGMALLOC_EXTENSIONS
       outbuf_addv(&out, "extra_ref   : %d\n", ob->extra_ref);
@@ -76,15 +77,16 @@ void f_debug_info(void) {
       outbuf_addv(&out, "Name /%s\n", ob->prog->filename);
       outbuf_addv(&out, "program size %d\n", ob->prog->program_size);
       outbuf_addv(
-          &out, "function flags table %d (%d) \n",
+          &out, "function flags table %d (%lu) \n",
           ob->prog->last_inherited + ob->prog->num_functions_defined,
           (ob->prog->last_inherited + ob->prog->num_functions_defined) * sizeof(unsigned short));
-      outbuf_addv(&out, "compiler function table %d (%d) \n", ob->prog->num_functions_defined,
+      outbuf_addv(&out, "compiler function table %u (%" PRIu64 ") \n",
+                  ob->prog->num_functions_defined,
                   ob->prog->num_functions_defined * sizeof(function_t));
       outbuf_addv(&out, "num strings %d\n", ob->prog->num_strings);
-      outbuf_addv(&out, "num vars %d (%d)\n", ob->prog->num_variables_defined,
+      outbuf_addv(&out, "num vars %u (%" PRIu64 ")\n", ob->prog->num_variables_defined,
                   ob->prog->num_variables_defined * (sizeof(char *) + sizeof(short)));
-      outbuf_addv(&out, "num inherits %d (%d)\n", ob->prog->num_inherited,
+      outbuf_addv(&out, "num inherits %d (%lu)\n", ob->prog->num_inherited,
                   ob->prog->num_inherited * sizeof(inherit_t));
       outbuf_addv(&out, "total size %d\n", ob->prog->total_size);
       break;
@@ -126,11 +128,9 @@ void f_refs(void) {
     case T_FUNCTION:
       r = sp->u.fp->hdr.ref;
       break;
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER:
       r = sp->u.buf->ref;
       break;
-#endif
     case T_STRING:
       if (sp->subtype & STRING_COUNTED) {
         r = MSTR_REF(sp->u.string);
@@ -144,7 +144,7 @@ void f_refs(void) {
   }
   free_svalue(sp, "f_refs");
   put_number(r - 1); /* minus 1 to compensate for being arg of
-                        * refs() */
+                      * refs() */
 }
 #endif
 
@@ -173,6 +173,53 @@ void f_destructed_objects(void) {
 }
 #endif
 
+#ifdef F_DUMP_STRALLOC
+void dump_stralloc(outbuffer_t *);
+
+void f_dump_stralloc(void) {
+  auto target_file = sp->u.string;
+  const char *fn;
+  FILE *fp;
+  fn = check_valid_path(target_file, current_object, "debugmalloc", 1);
+  if (!fn) {
+    error("Invalid path '%s' for writing.\n", target_file);
+  }
+  fp = fopen(fn, "w");
+  if (!fp) {
+    error("Unable to open %s for writing.\n", fn);
+  }
+
+  outbuffer_t out;
+  outbuf_zero(&out);
+
+  dump_stralloc(&out);
+
+  outbuf_fix(&out);
+
+  fputs(out.buffer, fp);
+  fclose(fp);
+
+  pop_stack();
+  outbuf_push(&out);
+}
+#endif
+
+#ifdef F_DUMP_JEMALLOC
+#ifdef HAVE_JEMALLOC
+#define JEMALLOC_MANGLE
+#include <jemalloc/jemalloc.h>  // for mallctl
+#endif
+
+void f_dump_jemalloc() {
+#ifdef HAVE_JEMALLOC
+  mallctl("prof.dump", NULL, NULL, NULL, 0);
+  malloc_stats_print(nullptr, nullptr, "");
+#else
+  debug_message("Jemalloc is disabled, dump_jemalloc() has no effect.\n");
+#endif
+}
+#endif
+
 #if (defined(DEBUGMALLOC) && defined(DEBUGMALLOC_EXTENSIONS))
 #ifdef F_DEBUGMALLOC
 void f_debugmalloc(void) {
@@ -193,7 +240,7 @@ void f_set_malloc_mask(void) { set_malloc_mask((sp--)->u.number); }
 void f_check_memory(void) { check_all_blocks((sp--)->u.number); }
 #endif
 #endif /* (defined(DEBUGMALLOC) && \
-* defined(DEBUGMALLOC_EXTENSIONS)) */
+        * defined(DEBUGMALLOC_EXTENSIONS)) */
 
 #ifdef F_TRACE
 void f_trace(void) {
@@ -209,7 +256,7 @@ void f_trace(void) {
 
 #ifdef F_TRACEPREFIX
 void f_traceprefix(void) {
-  char *old = 0;
+  const char *old = 0;
 
   if (command_giver && command_giver->interactive) {
     old = command_giver->interactive->trace_prefix;

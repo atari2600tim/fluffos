@@ -4,31 +4,29 @@
 #include "backend.h"
 
 #include <chrono>
-#include <event2/dns.h>    // for evdns_set_log_fn
-#include <event2/event.h>  // for event_add, etc
-#include <math.h>          // for exp
-#include <stdio.h>         // for NULL, sprintf
+#include <event2/dns.h>     // for evdns_set_log_fn
+#include <event2/event.h>   // for event_add, etc
+#include <event2/thread.h>  // for thread support
+#include <math.h>           // for exp
+#include <stdio.h>          // for NULL, sprintf
 #ifdef TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
+#include <sys/time.h>
+#include <time.h>
 #else
-# ifdef HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
+#ifdef HAVE_SYS_TIME_H
+#include <sys/time.h>
+#else
+#include <time.h>
 #endif
-#include <sys/types.h>     // for int64_t
-#include <deque>           // for deque
-#include <functional>      // for _Bind, less, bind, function
-#include <map>             // for multimap, _Rb_tree_iterator
-#include <utility>         // for pair, make_pair
+#endif
+#include <sys/types.h>  // for int64_t
+#include <deque>        // for deque
+#include <functional>   // for _Bind, less, bind, function
+#include <map>          // for multimap, _Rb_tree_iterator
+#include <utility>      // for pair, make_pair
 
 #include "vm/vm.h"
 
-#ifdef PACKAGE_ASYNC
-#include "packages/async/async.h"
-#endif
 #include "packages/core/heartbeat.h"
 #include "packages/core/reclaim.h"
 #ifdef PACKAGE_MUDLIB_STATS
@@ -39,18 +37,23 @@
 #endif
 
 // FIXME: rewrite other part so this could become static.
-struct event_base *g_event_base = NULL;
+struct event_base *g_event_base = nullptr;
 
 namespace {
-void libevent_log(int severity, const char *msg) { debug(event, "%d:%s\n", severity, msg); }
-void libevent_dns_log(int severity, const char *msg) { debug(dns, "%d:%s\n", severity, msg); }
-}
+void libevent_log(int severity, const char *msg) { debug(event, "events:%d:%s\n", severity, msg); }
+void libevent_dns_log(int severity, const char *msg) { debug(dns, "dns:%d:%s\n", severity, msg); }
+}  // namespace
 // Initialize backend
 event_base *init_backend() {
   event_set_log_callback(libevent_log);
   evdns_set_log_fn(libevent_dns_log);
 #ifdef DEBUG
   event_enable_debug_mode();
+#endif
+#ifdef _WIN32
+  evthread_use_windows_threads();
+#else
+  evthread_use_pthreads();
 #endif
   g_event_base = event_base_new();
   debug_message("Event backend in use: %s\n", event_base_get_method(g_event_base));
@@ -72,7 +75,7 @@ std::chrono::milliseconds gametick_to_time(int ticks) {
 namespace {
 // TODO: remove the need for this
 // Global variable for game ticket event handle.
-struct event *g_ev_tick = NULL;
+struct event *g_ev_tick = nullptr;
 
 inline struct timeval gametick_timeval() {
   static struct timeval val {
@@ -83,8 +86,7 @@ inline struct timeval gametick_timeval() {
 }
 
 // Global structure to holding all events to be executed on gameticks.
-typedef std::multimap<decltype(g_current_gametick), tick_event *,
-                      std::less<decltype(g_current_gametick)>> TickQueue;
+typedef std::multimap<decltype(g_current_gametick), tick_event *, std::less<>> TickQueue;
 TickQueue g_tick_queue;
 
 // Call all events for current tick
@@ -123,13 +125,9 @@ inline void call_tick_events() {
       delete event;
     }
   }
-// TODO: Move this into timer based.
-#ifdef PACKAGE_ASYNC
-  check_reqs();
-#endif
 }
 
-void on_game_tick(int fd, short what, void *arg) {
+void on_game_tick(evutil_socket_t fd, short what, void *arg) {
   call_tick_events();
   g_current_gametick++;
 
@@ -149,7 +147,7 @@ tick_event *add_gametick_event(std::chrono::milliseconds delay_msecs,
 }
 
 namespace {
-void on_walltime_event(int fd, short what, void *arg) {
+void on_walltime_event(evutil_socket_t fd, short what, void *arg) {
   auto event = reinterpret_cast<tick_event *>(arg);
   if (event->valid) {
     event->callback();
@@ -163,8 +161,7 @@ tick_event *add_walltime_event(std::chrono::milliseconds delay_msecs,
                                tick_event::callback_type callback) {
   auto event = new tick_event(callback);
   struct timeval val {
-     (int)(delay_msecs.count() / 1000),
-     (int)(delay_msecs.count() % 1000 * 1000),
+    (int)(delay_msecs.count() / 1000), (int)(delay_msecs.count() % 1000 * 1000),
   };
   struct timeval *delay_ptr = nullptr;
   if (delay_msecs.count() != 0) {
@@ -207,7 +204,7 @@ void backend(struct event_base *base) {
   add_gametick_event(std::chrono::seconds(0), tick_event::callback_type(call_heart_beat));
   add_gametick_event(std::chrono::minutes(5), tick_event::callback_type(look_for_objects_to_swap));
   add_gametick_event(std::chrono::minutes(30),
-                     tick_event::callback_type(std::bind(reclaim_objects, true)));
+                     tick_event::callback_type([] { return reclaim_objects(true); }));
 #ifdef PACKAGE_MUDLIB_STATS
   add_gametick_event(std::chrono::minutes(60), tick_event::callback_type(mudlib_stats_decay));
 #endif
@@ -264,7 +261,7 @@ void look_for_objects_to_swap() {
    */
   next_ob = obj_list;
   last_good_ob = obj_list;
-  while (1) {
+  while (true) {
     while ((ob = (object_t *)next_ob)) {
       int ready_for_clean_up = 0;
 
@@ -354,7 +351,7 @@ const double consts[kNumConst]{
     exp(0 / 900.0), exp(-1 / 900.0), exp(-2 / 900.0), exp(-3 / 900.0), exp(-4 / 900.0),
 };
 double load_av = 0.0;
-}
+}  // namespace
 
 void update_load_av() {
   static long last_time;

@@ -41,12 +41,6 @@
  */
 #undef CHECK_MEMORY
 
-/* NO_BUFFER_TYPE: if this is #define'd then LPC code using the 'buffer'
- *   type won't be allowed to compile (since the 'buffer' type won't be
- *   recognized by the lexer).
- */
-#undef NO_BUFFER_TYPE
-
 /* ARRAY_RESERVED_WORD: If this is defined then the word 'array' can
  *   be used to define arrays, as in:
  *
@@ -91,12 +85,6 @@
  */
 #define MAX_SAVE_SVALUE_DEPTH 100
 
-/* Miscellaneous config options that should probably be in the runtime
- * config file.
- */
-/* MAX_LOCAL: maximum number of local variables allowed per LPC function */
-#define CFG_MAX_LOCAL_VARIABLES 50
-
 /* CFG_MAX_GLOBAL_VARIABLES: This value determines the maximum number of
  *   global variables per object.  The maximum value is 65536.
  */
@@ -109,8 +97,6 @@
 #define CFG_EVALUATOR_STACK_SIZE 65536
 #define CFG_COMPILER_STACK_SIZE 600
 #define CFG_MAX_CALL_DEPTH 150
-/* This must be one of 4, 16, 64, 256, 1024, 4096 */
-#define CFG_LIVING_HASH_SIZE 256
 
 /* USE_32BIT_ADDRESSES: Use 32 bits for addresses of function, instead of
  * the usual 16 bits.  This increases the maximum program size from 64k
@@ -129,7 +115,7 @@
  *   comm.c's add_message(). Instead of blindly making this value larger,
  *   your mudlib should be coded to not send huge strings to users.
  */
-#define LARGEST_PRINTABLE_STRING 8192
+#define LARGEST_PRINTABLE_STRING 65535
 
 /* PROFILE_FUNCTIONS: define this to be able to measure the CPU time used by
  *   all of the user-defined functions in each LPC object.  Note: defining

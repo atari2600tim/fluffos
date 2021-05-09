@@ -6,26 +6,8 @@
 #ifndef INTERPRET_H
 #define INTERPRET_H
 
-#include "packages/core/heartbeat.h"  // FIXME: for heartbeat
-#include "interactive.h"              // FIXME: for TRACE* macro
-
-/* Trace defines */
-#define TRACE_CALL 1
-#define TRACE_CALL_OTHER 2
-#define TRACE_RETURN 4
-#define TRACE_ARGS 8
-#define TRACE_EXEC 16
-#define TRACE_HEART_BEAT 32
-#define TRACE_APPLY 64
-#define TRACE_OBJNAME 128
-#define TRACETST(b) (command_giver->interactive->trace_level & (b))
-#define TRACEP(b)                                                \
-  (command_giver && command_giver->interactive && TRACETST(b) && \
-   (command_giver->interactive->trace_prefix == 0 ||             \
-    (current_object &&                                           \
-     strpref(command_giver->interactive->trace_prefix, current_object->obname))))
-#define TRACEHB \
-  (g_current_heartbeat_obj == 0 || (command_giver->interactive->trace_level & TRACE_HEART_BEAT))
+#include "vm/internal/base/program.h"
+#include "vm/internal/base/svalue.h"
 
 /*
  * Control stack element.
@@ -65,10 +47,12 @@ struct control_stack_t {
   struct defer_list *defers;
   int num_local_variables;   /* Local + arguments */
   int function_index_offset; /* Used when executing functions in inherited
-                                * programs */
+                              * programs */
   int variable_index_offset; /* Same */
   short caller_type;         /* was this a locally called function? */
   short framekind;
+
+  std::shared_ptr<std::string> trace_id;
 };
 
 struct function_to_call_t {
@@ -132,9 +116,9 @@ extern short caller_type;
 extern char *pc;
 extern svalue_t *sp;
 extern svalue_t *fp;
-extern svalue_t *end_of_stack;
+extern svalue_t *const end_of_stack;
 extern svalue_t catch_value;
-extern control_stack_t control_stack[];
+extern control_stack_t *const control_stack;
 extern control_stack_t *csp;
 extern int too_deep_error;
 extern int max_eval_error;
@@ -157,8 +141,7 @@ void call_direct(object_t *, int, int, int);
 void eval_instruction(char *p);
 
 function_t *setup_inherited_frame(int);
-program_t *find_function_by_name(object_t *, const char *, int *, int *);
-char *function_name(program_t *, int);
+const char *function_name(program_t *, int);
 void remove_object_from_stack(object_t *);
 void setup_fake_frame(funptr_t *);
 void remove_fake_frame(void);
@@ -169,8 +152,8 @@ void process_efun_callback(int, function_to_call_t *, int);
 svalue_t *call_efun_callback(function_to_call_t *, int);
 svalue_t *safe_call_efun_callback(function_to_call_t *, int);
 const char *type_name(int c);
-void bad_arg(int, int);
-void bad_argument(svalue_t *, int, int, int);
+[[noreturn]] void bad_arg(int, int);
+[[noreturn]] void bad_argument(svalue_t *, int, int, int);
 void check_for_destr(array_t *);
 int is_static(const char *, object_t *);
 svalue_t *call_function_pointer(funptr_t *, int);
@@ -218,8 +201,6 @@ void mark_stack(void);
 
 // TODO: move these to correct places
 void setup_varargs_variables(int, int, int);
-extern int tracedepth;
-void do_trace_call(int);
 
 inline const char *access_to_name(int mode) {
   switch (mode) {

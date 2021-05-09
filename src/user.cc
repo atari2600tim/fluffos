@@ -11,7 +11,8 @@
 #include <algorithm>   // for count_if, for_each, remove
 #include <cstring>     // for memset
 #include <functional>  // for function
-#include <vector>      // for vector
+#include <utility>
+#include <vector>  // for vector
 
 #include "interactive.h"  // for interactive_t->ob
 #include "vm/vm.h"
@@ -33,7 +34,7 @@ void user_del(interactive_t *user) {
 }
 
 // Get a copy of all users
-const std::vector<interactive_t *> users() { return all_users; }
+const std::vector<interactive_t *> &users() { return all_users; }
 
 // Count users
 int users_num(bool include_hidden) {
@@ -46,5 +47,5 @@ int users_num(bool include_hidden) {
 }
 
 void users_foreach(std::function<void(interactive_t *)> func) {
-  std::for_each(all_users.begin(), all_users.end(), func);
+  std::for_each(all_users.begin(), all_users.end(), std::move(func));
 }

@@ -5,9 +5,27 @@
 #include <globals.h>
 #include <lpctypes.h>
 
-int
-same(mixed x, mixed y) {
-    if (typeof(x) != typeof(y)) return 0;
+// JSON sefun
+inherit "std/json";
+// Breakstring sefun
+inherit "std/break_string";
+// bitmap_font sefun
+inherit "std/base64" ;
+inherit "std/bitmap_font";
+inherit "std/highest" ;
+inherit "std/lowest" ;
+inherit "std/range" ;
+inherit "std/sum" ;
+inherit "std/element_of_weighted" ; // requires: sum
+inherit "std/number_string" ;
+inherit "std/reduce" ;
+inherit "std/percent" ;
+
+int same(mixed x, mixed y) {
+    // Allow comparing array with buffer
+    if (!(typeof(x) == ARRAY && typeof(y) == BUFFER || typeof(y) == ARRAY && typeof(x) == BUFFER))
+      if (typeof(x) != typeof(y))
+        return 0;
     switch (typeof(x)) {
     case INT:
     case STRING:
@@ -20,6 +38,7 @@ same(mixed x, mixed y) {
 	if (!same(keys(x), keys(y))) return 0;
 	if (!same(values(x), values(y))) return 0;
 	return 1;
+    case BUFFER:
     case ARRAY:
 	if (x == y) return 1; // speed up this case
 	if (sizeof(x) != sizeof(y)) return 0;
@@ -27,11 +46,24 @@ same(mixed x, mixed y) {
 	    if (!same(x[i], y[i])) return 0;
 	}
 	return 1;
-    case BUFFER:
     case FUNCTION:
     case CLASS:
 	error("Not implemented.");
     }
+}
+
+void __assert_eq(mixed expected, mixed actual, string where) {
+  if (!same(expected, actual)) {
+    OUTPUT(where + ", Check Failed: \n" +
+        "Expected: \n" + sprintf("%O", expected) + "\nActual: \n" + sprintf("%O", actual) + "\nTrace: \n" + sprintf("%s", "/single/master"->get_last_error()) + "\n");
+  }
+}
+
+void __assert_ne(mixed expected, mixed actual, string where) {
+  if (same(expected, actual)) {
+    OUTPUT(where + ", Check Failed: \n" +
+        "Expect Not: \n" + sprintf("%O", expected) + "\nActual: \n" + sprintf("%O", actual) + "\nTrace: \n" + sprintf("%s", "/single/master"->get_last_error()) + "\n");
+  }
 }
 
 void
@@ -66,7 +98,7 @@ string
 file_owner(string file)
 {
     string temp;
-    
+
     if (file[0] != '/') file = "/" + file;
 
     if (sscanf(file, "/u/%s/%s/%*s", temp, temp) == 2) {
@@ -87,20 +119,20 @@ dump_variable(mixed arg)
 {
    string rtn;
    mixed x, y;
-   
+
    switch(typeof(arg)) {
    case OBJECT: return "("+file_name(arg)+")";
    case STRING: return "\""+arg+"\"";
    case INT: return "#"+arg;
-   case ARRAY: 
+   case ARRAY:
        {
 	   rtn = "ARRAY\n";
-	   foreach (y in arg) 
+	   foreach (y in arg)
 	       rtn += sprintf("[%d] == %s\n", x++, dump_variable(y));
-		   
+
 	   return rtn;
        }
- 
+
    case MAPPING:
        {
 	   rtn = "MAPPING\n" +
@@ -108,7 +140,7 @@ dump_variable(mixed arg)
 					  (: sprintf("[%s] == %s", $1, $2) :))), "\n");
 	   return rtn;
        }
-  
+
      case FUNCTION:
      case CLASS:
      case FLOAT:
@@ -116,7 +148,7 @@ dump_variable(mixed arg)
        {
 	   return sprintf("%O\n", arg);
        }
-       
+
        return "UNKNOWN";
    }
 }
@@ -129,17 +161,17 @@ dump_variable(mixed arg)
 string resolve_path(string curr, string newer) {
     int i, j, size;
     string *tmp;
-    
+
     switch(newer) {
-    case 0: 
+    case 0:
     case ".":
 	return curr;
-	
+
 #ifndef __NO_ENVIRONMENT__
     case "here":
 	return file_name(environment())+".c";
 #endif
-	
+
     default:
 	if (newer[0..1] == "~/") newer = user_path((string)this_player()->query_name()) + newer[2..];
 	else {
@@ -155,12 +187,12 @@ string resolve_path(string curr, string newer) {
 	    default: newer[<0..<1] = curr + "/";
 	    }
 	}
-	
+
 	if (newer[<1] != '/') newer += "/";
 	size = sizeof(tmp = regexp(explode(newer, "/"), "."));
-	
+
 	i = j = 0;
-	
+
 	while (i < size) {
 	    switch(tmp[i]) {
 	    case "..":
@@ -172,7 +204,7 @@ string resolve_path(string curr, string newer) {
 	    case ".":
 		tmp[i++] = 0;
 		break;
-		
+
 	    default:
 		j = ++i;
 		break;

@@ -1,15 +1,16 @@
 #include "base/std.h"
 
 #include "net/telnet.h"
+#include "net/sys_telnet.h"  // our own version of telnet header.
 
-#include <arpa/telnet.h>  // for LM, MODE_EDIT, TRAPSIG etc
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
 #include <string>
+#include <unicode/ucnv.h>
 
 #include "comm.h"
+#include "interactive.h"
 #include "packages/core/mssp.h"
-#include "packages/core/telnet_ext.h"
 #include "thirdparty/libtelnet/libtelnet.h"  // for telnet_t, telnet_event_t*
 #include "vm/vm.h"
 
@@ -34,33 +35,34 @@ struct telnet_t *net_telnet_init(interactive_t *user) {
   return telnet_init(my_telopts, telnet_event_handler, 0, user);
 }
 
-// ANSI
-static const int ANSI_SUBSTITUTE = 0x20;
-
 static inline void on_telnet_data(const char *buffer, unsigned long size, interactive_t *ip) {
-  for (int i = 0; i < size; i++) {
-    unsigned char c = static_cast<unsigned char>(buffer[i]);
-    switch (c) {
-      case 0x08:
-      case 0x7f:
-        if (ip->iflags & SINGLE_CHAR) {
-          ip->text[ip->text_end++] = c;
-        } else {
-          if (ip->text_end > 0) {
-            ip->text_end--;
-          }
-        }
-        break;
-      case 0x1b:
-        if (CONFIG_INT(__RC_NO_ANSI__) && CONFIG_INT(__RC_STRIP_BEFORE_PROCESS_INPUT__)) {
-          ip->text[ip->text_end++] = ANSI_SUBSTITUTE;
-          break;
-        }
-      // fallthrough
-      default:
-        ip->text[ip->text_end++] = c;
-        break;
+  char *transdata = const_cast<char *>(buffer);
+  auto translen = size;
+
+  // Handle charset transcoding
+  if (ip->trans) {
+    UErrorCode error_code = U_ZERO_ERROR;
+    translen = ucnv_toAlgorithmic(UConverterType::UCNV_UTF8, ip->trans, nullptr, 0, buffer, size,
+                                  &error_code);
+    if (error_code == U_BUFFER_OVERFLOW_ERROR) {
+      error_code = U_ZERO_ERROR;
+      transdata = (char *)DMALLOC(translen, TAG_TEMPORARY, "on_telnet_data: transcoding");
+      auto written = ucnv_toAlgorithmic(UConverterType::UCNV_UTF8, ip->trans, transdata, translen,
+                                        buffer, size, &error_code);
+      DEBUG_CHECK(written != translen, "Bug: translation buffer size calculation error");
+      if (U_FAILURE(error_code)) {
+        debug_message("add_message: Translation failed!");
+        transdata = const_cast<char *>(buffer);
+        translen = size;
+      };
     }
+  }
+
+  auto sanitized = u8_sanitize({transdata, translen});
+  on_user_input(ip, sanitized.c_str(), sanitized.length());
+
+  if (transdata != buffer) {
+    FREE(transdata);
   }
 }
 
@@ -105,6 +107,7 @@ static inline void on_telnet_will(unsigned char cmd, interactive_t *ip) {
   switch (cmd) {
     case TELNET_TELOPT_LINEMODE: {
       ip->iflags |= USING_LINEMODE;
+      set_linemode(ip);
       break;
     }
     case TELNET_TELOPT_ECHO:
@@ -122,9 +125,11 @@ static inline void on_telnet_will(unsigned char cmd, interactive_t *ip) {
       break;
     }
     case TELNET_TELOPT_MXP:
-      ip->iflags |= USING_MXP;
-      /* Mxp is enabled, tell the mudlib about it. */
-      safe_apply(APPLY_MXP_ENABLE, ip->ob, 0, ORIGIN_DRIVER);
+      if (CONFIG_INT(__RC_ENABLE_MXP__)) {
+        on_telnet_will_mxp(ip);
+      } else {
+        telnet_negotiate(ip->telnet, TELNET_DONT, TELNET_TELOPT_MXP);
+      }
       break;
     default:
       debug(telnet, "on_telnet_will: unimplemented command %d.\n", cmd);
@@ -155,31 +160,68 @@ static inline void on_telnet_wont(unsigned char cmd, interactive_t *ip) {
 static inline void on_telnet_do(unsigned char cmd, interactive_t *ip) {
   switch (cmd) {
     case TELNET_TELOPT_TM:
-      telnet_negotiate(ip->telnet, TELNET_TELOPT_TM, TELNET_WILL);
+      telnet_negotiate(ip->telnet, TELNET_WILL, TELNET_TELOPT_TM);
       break;
     case TELNET_TELOPT_ECHO:
       /* do nothing, but don't send a wont response */
       break;
     case TELNET_TELOPT_SGA:
-      ip->iflags |= SUPPRESS_GA;
-      telnet_negotiate(ip->telnet, TELNET_TELOPT_SGA, TELNET_WILL);
+      if (ip->iflags & USING_LINEMODE) {
+        ip->iflags |= SUPPRESS_GA;
+        telnet_negotiate(ip->telnet, TELNET_WILL, TELNET_TELOPT_SGA);
+      } else {
+        if (ip->iflags & SINGLE_CHAR) {
+          telnet_negotiate(ip->telnet, TELNET_WILL, TELNET_TELOPT_SGA);
+        } else {
+          telnet_negotiate(ip->telnet, TELNET_WONT, TELNET_TELOPT_SGA);
+        }
+      }
       break;
     case TELNET_TELOPT_GMCP:
+      if (!CONFIG_INT(__RC_ENABLE_GMCP__)) {
+#ifdef DEBUG
+        debug_message(
+            "Bad client: bogus IAC DO GMCP from %s.",
+            sockaddr_to_string(reinterpret_cast<const sockaddr *>(&ip->addr), ip->addrlen));
+        remove_interactive(ip->ob, false);
+#else
+        // do nothing
+#endif
+      }
       on_telnet_do_gmcp(ip);
       break;
     case TELNET_TELOPT_MSSP:
+      if (!CONFIG_INT(__RC_ENABLE_MSSP__)) {
+#ifdef DEBUG
+        debug_message(
+            "Bad client: bogus IAC DO MSSP from %s.",
+            sockaddr_to_string(reinterpret_cast<const sockaddr *>(&ip->addr), ip->addrlen));
+        remove_interactive(ip->ob, false);
+#else
+        // do nothing
+#endif
+      }
       on_telnet_do_mssp(ip);
       break;
     case TELNET_TELOPT_ZMP:
+      if (!CONFIG_INT(__RC_ENABLE_ZMP__)) {
+#ifdef DEBUG
+        debug_message(
+            "Bad client: bogus IAC DO ZMP from %s.",
+            sockaddr_to_string(reinterpret_cast<const sockaddr *>(&ip->addr), ip->addrlen));
+        remove_interactive(ip->ob, false);
+#else
+        // do nothing
+#endif
+      }
       ip->iflags |= USING_ZMP;
-      // real event is triggered in on_telnet_event;
       break;
     case TELNET_TELOPT_COMPRESS2:
       telnet_begin_compress2(ip->telnet);
       break;
     default:
       debug(telnet, "on_telnet_do: unimplemented code: %d.\n", cmd);
-      telnet_negotiate(ip->telnet, cmd, TELNET_WONT);
+      telnet_negotiate(ip->telnet, TELNET_WONT, cmd);
       break;
   }
   flush_message(ip);
@@ -193,7 +235,7 @@ static inline void on_telnet_dont(unsigned char cmd, interactive_t *ip) {
     case TELNET_TELOPT_SGA:
       if (ip->iflags & USING_LINEMODE) {
         ip->iflags &= ~SUPPRESS_GA;
-        telnet_negotiate(ip->telnet, TELNET_TELOPT_SGA, TELNET_WONT);
+        telnet_negotiate(ip->telnet, TELNET_WONT, TELNET_TELOPT_SGA);
       }
       break;
     default:
@@ -239,7 +281,7 @@ static inline void on_telnet_subnegotiation(unsigned char cmd, const char *buf, 
       // how this works.
       // Basically, we force client to use MODE_EDIT | MODE_TRAPSIG
       // and we ignore SLC settings.
-      unsigned char action = static_cast<unsigned char>(buf[0]);
+      auto action = static_cast<unsigned char>(buf[0]);
       switch (action) {
         case LM_MODE:
           /* Don't do anything with an ACK */
@@ -277,6 +319,7 @@ static inline void on_telnet_subnegotiation(unsigned char cmd, const char *buf, 
       if (size >= 4) {
         push_number((static_cast<unsigned char>(buf[0]) << 8) | static_cast<unsigned char>(buf[1]));
         push_number((static_cast<unsigned char>(buf[2]) << 8) | static_cast<unsigned char>(buf[3]));
+        set_eval(max_eval_cost);
         safe_apply(APPLY_WINDOW_SIZE, ip->ob, 2, ORIGIN_DRIVER);
       }
       break;
@@ -288,6 +331,7 @@ static inline void on_telnet_subnegotiation(unsigned char cmd, const char *buf, 
       strncpy(str, buf, size);
 
       push_malloced_string(str);
+      set_eval(max_eval_cost);
       safe_apply(APPLY_GMCP, ip->ob, 1, ORIGIN_DRIVER);
       break;
     }
@@ -299,6 +343,7 @@ static inline void on_telnet_subnegotiation(unsigned char cmd, const char *buf, 
         str[i] = (buf[i] ? buf[i] : 'I');
       }
       push_malloced_string(str);
+      set_eval(max_eval_cost);
       safe_apply(APPLY_TELNET_SUBOPTION, ip->ob, 1, ORIGIN_DRIVER);
       break;
     }
@@ -308,22 +353,24 @@ static inline void on_telnet_subnegotiation(unsigned char cmd, const char *buf, 
 
 static inline void on_telnet_environ(const struct telnet_environ_t *values, unsigned long size,
                                      interactive_t *ip) {
-  static const int ENV_FILLER = 0x1e;
-
-  std::string str = "";
-
   for (int i = 0; i < size; i++) {
-    char buf[1024];
-    buf[0] = '\0';
-    sprintf(buf, "%d%s%d%s", ENV_FILLER, values[i].var, 1, values[i].value);
-    str.append(buf);
+    if (values[i].var == nullptr || values[i].value == nullptr) {
+      continue;
+    }
+    auto sanitized_var = u8_sanitize(values[i].var);
+    copy_and_push_string(sanitized_var.c_str());
+
+    auto sanitized_value = u8_sanitize(values[i].value);
+    copy_and_push_string(sanitized_value.c_str());
+
+    set_eval(max_eval_cost);
+    safe_apply(APPLY_RECEIVE_ENVIRON, ip->ob, 2, ORIGIN_DRIVER);
   }
-  copy_and_push_string(str.c_str());
-  safe_apply(APPLY_RECEIVE_ENVIRON, ip->ob, 1, ORIGIN_DRIVER);
 }
 
 static inline void on_telnet_ttype(const char *name, interactive_t *ip) {
   copy_and_push_string(name);
+  set_eval(max_eval_cost);
   safe_apply(APPLY_TERMINAL_TYPE, ip->ob, 1, ORIGIN_DRIVER);
 }
 
@@ -385,7 +432,7 @@ void telnet_event_handler(telnet_t *telnet, telnet_event_t *ev, void *user_data)
       break;
     }
     case TELNET_EV_ENVIRON: {
-      if (ev->environ.cmd == TELNET_ENVIRON_IS) {
+      if (ev->environ.cmd == TELNET_ENVIRON_IS || ev->environ.cmd == TELNET_ENVIRON_INFO) {
         on_telnet_environ(ev->environ.values, ev->environ.size, ip);
         break;
       }
@@ -413,12 +460,6 @@ void telnet_event_handler(telnet_t *telnet, telnet_event_t *ev, void *user_data)
 // NOTE: Some options need to be sent DO first, and some
 // needs WILL, don't change or you will risk breaking clients.
 void send_initial_telnet_negotiations(struct interactive_t *user) {
-  // Default request linemode, save bytes/cpu.
-  set_linemode(user, false);
-
-  // Get rid of GA, save some byte
-  telnet_negotiate(user->telnet, TELNET_DO, TELNET_TELOPT_SGA);
-
   /* Ask permission to ask them for their terminal type */
   telnet_negotiate(user->telnet, TELNET_DO, TELNET_TELOPT_TTYPE);
 
@@ -429,49 +470,68 @@ void send_initial_telnet_negotiations(struct interactive_t *user) {
   telnet_negotiate(user->telnet, TELNET_DO, TELNET_TELOPT_NEW_ENVIRON);
 
 /* We support COMPRESS2 */
-#ifdef HAVE_ZLIB
+#ifdef HAVE_ZLIB  // come from libtelnet
   telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_COMPRESS2);
 #endif
 
   // Ask them if they support mxp.
-  telnet_negotiate(user->telnet, TELNET_DO, TELNET_TELOPT_MXP);
+  if (CONFIG_INT(__RC_ENABLE_MXP__)) {
+    telnet_negotiate(user->telnet, TELNET_DO, TELNET_TELOPT_MXP);
+  }
+
+  // gmcp
+  if (CONFIG_INT(__RC_ENABLE_GMCP__)) {
+    telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_GMCP);
+  }
+
+  // zmp
+  if (CONFIG_INT(__RC_ENABLE_ZMP__)) {
+    telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_ZMP);
+  }
 
   // And we support mssp
   // http://tintin.sourceforge.net/mssp/ , server send WILL first.
-  telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_MSSP);
-
-  // May as well ask for zmp while we're there!
-  telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_ZMP);
-
-  // gmcp *yawn*
-  telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_GMCP);
+  if (CONFIG_INT(__RC_ENABLE_MSSP__)) {
+    telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_MSSP);
+  }
 }
 
 void set_linemode(interactive_t *ip, bool flush) {
-  telnet_negotiate(ip->telnet, TELNET_DO, TELNET_TELOPT_LINEMODE);
+  if (ip->telnet) {
+    if (ip->iflags & USING_LINEMODE) {
+      telnet_negotiate(ip->telnet, TELNET_DO, TELNET_TELOPT_LINEMODE);
 
-  const unsigned char sb_mode[] = {LM_MODE, MODE_EDIT | MODE_TRAPSIG};
-  telnet_subnegotiation(ip->telnet, TELNET_TELOPT_LINEMODE, reinterpret_cast<const char *>(sb_mode),
-                        sizeof(sb_mode));
-
-  if (flush) {
-    flush_message(ip);
+      const unsigned char sb_mode[] = {LM_MODE, MODE_EDIT | MODE_TRAPSIG};
+      telnet_subnegotiation(ip->telnet, TELNET_TELOPT_LINEMODE,
+                            reinterpret_cast<const char *>(sb_mode), sizeof(sb_mode));
+    } else {
+      telnet_negotiate(ip->telnet, TELNET_WONT, TELNET_TELOPT_SGA);
+    }
+    if (flush) {
+      flush_message(ip);
+    }
   }
 }
 
 void set_charmode(interactive_t *ip, bool flush) {
-  if (ip->iflags & USING_LINEMODE) {
-    telnet_negotiate(ip->telnet, TELNET_DONT, TELNET_TELOPT_LINEMODE);
-  }
-  if (flush) {
-    flush_message(ip);
+  if (ip->telnet) {
+    if (ip->iflags & USING_LINEMODE) {
+      telnet_negotiate(ip->telnet, TELNET_DONT, TELNET_TELOPT_LINEMODE);
+    } else {
+      telnet_negotiate(ip->telnet, TELNET_WILL, TELNET_TELOPT_SGA);
+    }
+    if (flush) {
+      flush_message(ip);
+    }
   }
 }
 
 void set_localecho(interactive_t *ip, bool enable, bool flush) {
-  telnet_negotiate(ip->telnet, enable ? TELNET_WONT : TELNET_WILL, TELNET_TELOPT_ECHO);
-  if (flush) {
-    flush_message(ip);
+  if (ip->telnet) {
+    telnet_negotiate(ip->telnet, enable ? TELNET_WONT : TELNET_WILL, TELNET_TELOPT_ECHO);
+    if (flush) {
+      flush_message(ip);
+    }
   }
 }
 
@@ -486,4 +546,65 @@ void telnet_start_request_ttype(struct telnet_t *telnet) {
   telnet_negotiate(telnet, TELNET_DO, TELNET_TELOPT_TTYPE);
 }
 void telnet_request_ttype(struct telnet_t *telnet) { telnet_begin_sb(telnet, TELNET_TTYPE_SEND); }
-void telnet_request_term_size(struct telnet_t * /*unused*/) {}
+
+void telnet_send_nop(struct telnet_t *telnet) {
+  if (telnet) {
+    telnet_iac(telnet, TELNET_NOP);
+  }
+}
+
+void telnet_send_ga(struct telnet_t *telnet) {
+  if (telnet) {
+    telnet_iac(telnet, TELNET_GA);
+  }
+}
+
+/* MXP */
+
+void on_telnet_will_mxp(interactive_t *ip) {
+  ip->iflags |= USING_MXP;
+  /* Mxp is enabled, tell the mudlib about it. */
+  set_eval(max_eval_cost);
+  safe_apply(APPLY_MXP_ENABLE, ip->ob, 0, ORIGIN_DRIVER);
+}
+
+bool on_receive_mxp_tag(interactive_t *ip, const char *user_command) {
+  copy_and_push_string(user_command);
+
+  set_eval(max_eval_cost);
+  auto ret = safe_apply(APPLY_MXP_TAG, ip->ob, 1, ORIGIN_DRIVER);
+  if (ret && ret->type == T_NUMBER && ret->u.number) {
+    return false;
+  }
+  return true;
+}
+
+/* GMCP */
+
+void on_telnet_do_gmcp(interactive_t *ip) {
+  ip->iflags |= USING_GMCP;
+
+  set_eval(max_eval_cost);
+  safe_apply(APPLY_GMCP_ENABLE, ip->ob, 0, ORIGIN_DRIVER);
+}
+
+/* ZMP */
+
+void on_telnet_do_zmp(const char **argv, unsigned long argc, interactive_t *ip) {
+  ip->iflags |= USING_ZMP;
+
+  // Push the command
+  copy_and_push_string(argv[0]);
+
+  // Push the array
+  array_t *arr = allocate_array(argc - 1);
+  for (int i = 1; i < argc; i++) {
+    arr->item[i].u.string = string_copy(argv[i], "ZMP");
+    arr->item[i].type = T_STRING;
+    arr->item[i].subtype = STRING_MALLOC;
+  }
+  push_refed_array(arr);
+
+  set_eval(max_eval_cost);
+  safe_apply(APPLY_ZMP, ip->ob, 2, ORIGIN_DRIVER);
+}

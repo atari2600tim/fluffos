@@ -5,7 +5,9 @@
    directly */
 
 /* FP_LOCAL */
-typedef struct { short index; } local_ptr_t;
+typedef struct {
+  short index;
+} local_ptr_t;
 
 /* FP_SIMUL */
 typedef local_ptr_t simul_ptr_t;
@@ -27,7 +29,7 @@ struct functional_t {
 
 /* common header */
 struct funptr_hdr_t {
-  unsigned short ref;
+  uint32_t ref;
   short type; /* FP_* is used */
 #ifdef DEBUGMALLOC_EXTENSIONS
   int extra_ref;
@@ -48,7 +50,7 @@ struct funptr_t {
 
 union string_or_func {
   funptr_t *f;
-  char *s;
+  const char *s;
 };
 
 void dealloc_funp(funptr_t *);

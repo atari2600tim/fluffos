@@ -14,10 +14,17 @@
 #include <vector>
 #include <zlib.h>
 
+#include "applies_table.autogen.h"
 #include "base/internal/strutils.h"  // for startsWith, endsWith
 #include "comm.h"                    // add_message FIXME: reverse API
+#include "vm/internal/apply.h"
 #include "vm/internal/base/machine.h"
+#include "vm/internal/eval_limit.h"
 #include "vm/internal/otable.h"  // FIXME:
+#include "vm/internal/master.h"
+#include "vm/internal/simulate.h"
+#include "ghc/filesystem.hpp"
+namespace fs = ghc::filesystem;
 
 #include "packages/core/add_action.h"  // for remove_living_name
 #include "packages/core/call_out.h"    // for remove_all_call_out
@@ -48,12 +55,12 @@ int valid_hide(object_t *obj) {
   }
   push_object(obj);
   ret = safe_apply_master_ob(APPLY_VALID_HIDE, 1);
-  return (!IS_ZERO(ret));
+  return MASTER_APPROVED(ret);
 }
 #endif
 
 int save_svalue_depth = 0, max_depth;
-int *sizes = 0;
+int *sizes = nullptr;
 
 int svalue_save_size(svalue_t *v) {
   switch (v->type) {
@@ -63,7 +70,7 @@ int svalue_save_size(svalue_t *v) {
       int size = 0;
 
       while ((c = *cp++)) {
-        if (c == '\\' || c == '"') {
+        if (c == '\\' || c == '"' || c == '\r') {
           size++;
         }
         size++;
@@ -128,7 +135,9 @@ int svalue_save_size(svalue_t *v) {
       sprintf(buf, "%" LPC_FLOAT_FMTSTR_P, v->u.real);
       return (strlen(buf) + 1);
     }
-    default: { return 1; }
+    default: {
+      return 1;
+    }
   }
 }
 
@@ -141,7 +150,7 @@ void save_svalue(svalue_t *v, char **buf) {
 
       *cp++ = '"';
       while ((c = *str++)) {
-        if (c == '"' || c == '\\') {
+        if (c == '"' || c == '\\' || c == '\r') {
           *cp++ = '\\';
           *cp++ = c;
         } else {
@@ -473,6 +482,9 @@ static int restore_interior_string(char **val, svalue_t *sv) {
           *val = cp;
           newstr = new_string(len = (news - start), "restore_string");
           strcpy(newstr, start);
+          if (!u8_validate(newstr)) {
+            return ROB_STRING_UTF8_ERROR;
+          }
           sv->u.string = newstr;
           sv->type = T_STRING;
           sv->subtype = STRING_MALLOC;
@@ -493,6 +505,9 @@ static int restore_interior_string(char **val, svalue_t *sv) {
   len = cp - start;
   newstr = new_string(len, "restore_string");
   strcpy(newstr, start);
+  if (!u8_validate(newstr)) {
+    return ROB_STRING_UTF8_ERROR;
+  }
   sv->u.string = newstr;
   sv->type = T_STRING;
   sv->subtype = STRING_MALLOC;
@@ -629,7 +644,7 @@ static int restore_mapping(char **str, svalue_t *sv) {
   a = m->table;                    /* we'll leak */
   mask = m->table_size;
 
-  while (1) {
+  while (true) {
     switch (c = *cp++) {
       case '"': {
         *str = cp;
@@ -1068,13 +1083,16 @@ static int restore_string(char *val, svalue_t *sv) {
           *news = '\0';
           newstr = new_string(news - start, "restore_string");
           strcpy(newstr, start);
+          if (!u8_validate(newstr)) {
+            return ROB_STRING_UTF8_ERROR;
+          }
           sv->u.string = newstr;
           sv->type = T_STRING;
           sv->subtype = STRING_MALLOC;
           return 0;
         }
       }
-
+      // fall through
       case '\0': {
         return ROB_STRING_ERROR;
       }
@@ -1088,6 +1106,9 @@ static int restore_string(char *val, svalue_t *sv) {
   len = cp - start;
   newstr = new_string(len, "restore_string");
   strcpy(newstr, start);
+  if (!u8_validate(newstr)) {
+    return ROB_STRING_UTF8_ERROR;
+  }
   sv->u.string = newstr;
   sv->type = T_STRING;
   sv->subtype = STRING_MALLOC;
@@ -1121,7 +1142,7 @@ int restore_svalue(char *cp, svalue_t *v) {
         if (sizes) {
           FREE((char *)sizes);
         }
-        sizes = (int *)0;
+        sizes = (int *)nullptr;
       }
       return ret;
 
@@ -1181,7 +1202,7 @@ static int safe_restore_svalue(char *cp, svalue_t *v) {
         if (sizes) {
           FREE((char *)sizes);
         }
-        sizes = (int *)0;
+        sizes = (int *)nullptr;
       }
       if (ret) {
         return ret;
@@ -1214,7 +1235,7 @@ static int safe_restore_svalue(char *cp, svalue_t *v) {
   return 0;
 }
 
-static int fgv_recurse(program_t *prog, int *idx, char *name, unsigned short *type,
+static int fgv_recurse(program_t *prog, int *idx, const char *name, unsigned short *type,
                        int check_nosave) {
   int i;
   for (i = 0; i < prog->num_inherited; i++) {
@@ -1239,7 +1260,7 @@ static int fgv_recurse(program_t *prog, int *idx, char *name, unsigned short *ty
 int find_global_variable(program_t *prog, const char *const name, unsigned short *type,
                          int check_nosave) {
   int idx = 0;
-  char *str = findstring(name);
+  const char *str = findstring(name);
 
   if (str && fgv_recurse(prog, &idx, str, type, check_nosave)) {
     return idx;
@@ -1289,6 +1310,8 @@ void restore_object_from_line(object_t *ob, char *line, int noclear) {
       error("restore_object(): Illegal mapping format while restoring %s.\n", var);
     } else if (rc & ROB_STRING_ERROR) {
       error("restore_object(): Illegal string format while restoring %s.\n", var);
+    } else if (rc & ROB_STRING_UTF8_ERROR) {
+      error("restore_object(): Invalid utf8 string while restoring %s.\n", var);
     } else if (rc & ROB_CLASS_ERROR) {
       error("restore_object(): Illegal class format while restoring %s.\n", var);
     }
@@ -1326,7 +1349,7 @@ static int save_object_recurse(program_t *prog, svalue_t **svp, int type, int sa
     return 1;
   }
   oldSize = -1;
-  new_str = NULL;
+  new_str = nullptr;
   for (i = 0; i < prog->num_variables_defined; i++) {
     if (prog->variable_types[i] & DECL_NOSAVE) {
       (*svp)++;
@@ -1360,7 +1383,7 @@ static int save_object_recurse(program_t *prog, svalue_t **svp, int type, int sa
         result = fprintf(f, "%s %s\n", prog->variable_table[i], new_str);
       }
       if (result < 0) {
-        debug_perror("save_object: printf", 0);
+        debug_perror("save_object: printf", nullptr);
         FREE(new_str);
         return 0;
       }
@@ -1401,7 +1424,7 @@ static int save_object_recurse_str(program_t *prog, svalue_t **svp, int type, in
     return 1;
   }
   oldSize = -1;
-  new_str = NULL;
+  new_str = nullptr;
   for (i = 0; i < prog->num_variables_defined; i++) {
     if (prog->variable_types[i] & DECL_NOSAVE) {
       (*svp)++;
@@ -1428,7 +1451,7 @@ static int save_object_recurse_str(program_t *prog, svalue_t **svp, int type, in
     DEBUG_CHECK(p - new_str != theSize - 1, "Length miscalculated in save_object!");
     if (save_zeros || new_str[0] != '0' || new_str[1] != 0) { /* Armidale */
       if (sprintf(buf + textsize - 1, "%s %s\n", prog->variable_table[i], new_str) < 0) {
-        debug_perror("save_object: fprintf", 0);
+        debug_perror("save_object: fprintf", nullptr);
         FREE(new_str);
         return 0;
       }
@@ -1443,9 +1466,10 @@ static int save_object_recurse_str(program_t *prog, svalue_t **svp, int type, in
   return textsize;
 }
 
+namespace {
 int sel = -1;
-
-static const int SAVE_EXTENSION_GZ_LENGTH = strlen(SAVE_GZ_EXTENSION);
+const int SAVE_EXTENSION_GZ_LENGTH = strlen(SAVE_GZ_EXTENSION);
+}  // namespace
 
 int save_object(object_t *ob, const char *file, int save_zeros) {
   char *name, *p;
@@ -1500,7 +1524,7 @@ int save_object(object_t *ob, const char *file, int save_zeros) {
   }
 
   strcpy(save_name, ob->obname);
-  if ((p = strrchr(save_name, '#')) != 0) {
+  if ((p = strrchr(save_name, '#')) != nullptr) {
     *p = '\0';
   }
   p = save_name + strlen(save_name) - 1;
@@ -1514,8 +1538,8 @@ int save_object(object_t *ob, const char *file, int save_zeros) {
    */
   sprintf(tmp_name, "%.250s.tmp", file);
 
-  gzf = NULL;
-  f = NULL;
+  gzf = nullptr;
+  f = nullptr;
   if (save_compressed) {
     gzf = gzopen(tmp_name, "wb");
     if (!gzf) {
@@ -1525,7 +1549,7 @@ int save_object(object_t *ob, const char *file, int save_zeros) {
       error("Could not open /%s for a save.\n", tmp_name);
     }
   } else {
-    if (!(f = fopen(tmp_name, "w")) || fprintf(f, "#/%s\n", save_name) < 0) {
+    if (!(f = fopen(tmp_name, "wb")) || fprintf(f, "#/%s\n", save_name) < 0) {
       error("Could not open /%s for a save.\n", tmp_name);
     }
   }
@@ -1547,11 +1571,14 @@ int save_object(object_t *ob, const char *file, int save_zeros) {
     debug_message("Failed to completely save file. Disk could be full.\n");
     std::remove(tmp_name);
   } else {
-    if (rename(tmp_name, file) < 0) {
-      debug_perror("save_object", file);
-      debug_message("Failed to rename /%s to /%s\n", tmp_name, file);
-      debug_message("Failed to save object!\n");
+    std::error_code error_code;
+    auto base = fs::current_path(error_code);
+    fs::rename(base / fs::path(tmp_name), base / fs::path(file), error_code);
+    if (error_code) {
+      debug_message("Failed to rename /%s to /%s: Error: %d (%s)\n", tmp_name, file,
+                    error_code.value(), error_code.message().c_str());
       std::remove(tmp_name);
+      debug_message("Failed to save object!\n");
     } else if (save_compressed) {
       char buf[1024];
       // When compressed, unlink the uncompressed name too.
@@ -1577,7 +1604,7 @@ int save_object_str(object_t *ob, int save_zeros, char *saved, int size) {
   strcpy(now, "#/");
   now += 2;
   strcpy(now, ob->obname);
-  if ((p = strrchr(now, '#')) != 0) {
+  if ((p = strrchr(now, '#')) != nullptr) {
     *p = '\0';
   }
   p = now + strlen(now) - 1;
@@ -1636,7 +1663,8 @@ void clear_non_statics(object_t *ob) {
 
 void restore_object_from_buff(object_t *ob, const char *buf, int noclear) {
   std::istringstream input(buf);
-  for (std::string line; std::getline(input, line);) {
+  std::string line;
+  while (std::getline(input, line, '\n')) {
     if (ends_with(line, "\r")) {
       line = line.substr(0, line.length() - 1);
     }
@@ -1687,7 +1715,7 @@ int restore_object(object_t *ob, const char *file, int noclear) {
     error("restore_object: read permission denied: %s.\n", filename.c_str());
   }
 
-  // We always use zlib functions here and below, as it handls non-gzip file as wel.
+  // We always use zlib functions here and below, as it handles non-gzip file as well.
   gzFile gzf = gzopen(file, "rb");
   if (gzf == nullptr) {
     // Compat: do not return error, if there are no save files.
@@ -1744,16 +1772,7 @@ int restore_object(object_t *ob, const char *file, int noclear) {
     clear_non_statics(ob);
   }
 
-  error_context_t econ;
-  save_context(&econ);
-  try {
-    restore_object_from_buff(ob, buf.data(), noclear);
-  } catch (const char *) {
-    restore_context(&econ);
-    pop_context(&econ);
-    return 0;
-  }
-  pop_context(&econ);
+  restore_object_from_buff(ob, buf.data(), noclear);
 
   current_object = save;
   debug(d_flag, "Object /%s restored from /%s.\n", ob->obname, file);
@@ -1777,6 +1796,8 @@ void restore_variable(svalue_t *var, char *str) {
       error("restore_object(): Illegal mapping format.\n");
     } else if (rc & ROB_STRING_ERROR) {
       error("restore_object(): Illegal string format.\n");
+    } else if (rc & ROB_STRING_UTF8_ERROR) {
+      error("restore_object(): string is not valid utf8.\n");
     }
   }
 }
@@ -1790,7 +1811,7 @@ void dealloc_object(object_t *ob, const char *from) {
 
   if (!(ob->flags & O_DESTRUCTED)) {
     if (ob->next_all != ob) { /* This is fatal, and should never happen. */
-      fatal("FATAL: Object 0x%x /%s ref count 0, but not destructed (from %s).\n", ob, ob->obname,
+      fatal("FATAL: Object %p /%s ref count 0, but not destructed (from %s).\n", ob, ob->obname,
             from);
     } else {
       destruct_object(ob);
@@ -1806,11 +1827,11 @@ void dealloc_object(object_t *ob, const char *from) {
     tot_alloc_object_size -=
         (ob->prog->num_variables_total - 1) * sizeof(svalue_t) + sizeof(object_t);
     free_prog(&ob->prog);
-    ob->prog = 0;
+    ob->prog = nullptr;
   }
   if (ob->replaced_program) {
     FREE_MSTR(ob->replaced_program);
-    ob->replaced_program = 0;
+    ob->replaced_program = nullptr;
   }
 #ifdef PRIVS
   if (ob->privs) {
@@ -1823,7 +1844,7 @@ void dealloc_object(object_t *ob, const char *from) {
     DEBUG_CHECK1(ObjectTable::instance().find(ob->obname) == ob,
                  "Freeing object /%s but name still in name table", ob->obname);
     FREE((char *)ob->obname);
-    SETOBNAME(ob, 0);
+    SETOBNAME(ob, nullptr);
   }
 #ifdef DEBUG
   prev_all = ob->prev_all;
@@ -1911,7 +1932,7 @@ void set_nextreset(object_t *ob) {
 
 void reset_object(object_t *ob) {
   set_nextreset(ob);
-  save_command_giver(0);
+  save_command_giver(nullptr);
   set_eval(max_eval_cost);
   if (!safe_apply(APPLY_RESET, ob, 0, ORIGIN_DRIVER)) {
     /* no reset() in the object */
@@ -1979,8 +2000,8 @@ void reload_object(object_t *obj) {
     for (ob2 = obj->shadowed; ob2;) {
       otmp = ob2;
       ob2 = ob2->shadowed;
-      otmp->shadowed = 0;
-      otmp->shadowing = 0;
+      otmp->shadowed = nullptr;
+      otmp->shadowing = nullptr;
       destruct_object(otmp);
     }
   }
@@ -1994,8 +2015,8 @@ void reload_object(object_t *obj) {
   if (obj->shadowed) {
     obj->shadowed->shadowing = obj->shadowing;
   }
-  obj->shadowing = 0;
-  obj->shadowed = 0;
+  obj->shadowing = nullptr;
+  obj->shadowed = nullptr;
 #endif
   remove_living_name(obj);
   set_heart_beat(obj, 0);
@@ -2094,7 +2115,7 @@ void set_command_giver(object_t *ob) {
   }
 
   command_giver = ob;
-  if (command_giver != 0) {
+  if (command_giver != nullptr) {
     add_ref(command_giver, "set_command_giver");
   }
 }

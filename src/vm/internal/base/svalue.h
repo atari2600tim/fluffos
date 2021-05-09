@@ -4,19 +4,22 @@
 /* It is usually better to include "lpc_incl.h" instead of including this
  directly */
 #include "vm/internal/base/number.h"
+#include "thirdparty/json/include/nlohmann/json_fwd.hpp"
+using json = nlohmann::json;
 
-typedef struct { unsigned short ref; } refed_t;
+typedef struct {
+  uint32_t ref;
+} refed_t;
 
+typedef const char *LPC_STRING;
 union u {
   LPC_INT number;
   LPC_FLOAT real;
-  const char *string;
+  LPC_STRING string;
 
   refed_t *refed; /* any of the block below */
 
-#ifndef NO_BUFFER_TYPE
   struct buffer_t *buf;
-#endif
   struct object_t *ob;
   struct array_t *arr;
   struct mapping_t *map;
@@ -40,7 +43,8 @@ struct svalue_t {
 };
 
 struct ref_t {
-  unsigned short ref;
+  uint32_t ref;
+
   struct ref_t *next, *prev;
   struct control_stack_t *csp;
   svalue_t *lvalue;
@@ -48,53 +52,48 @@ struct ref_t {
 };
 
 /* values for type field of svalue struct */
-#define T_INVALID 0x0
-#define T_LVALUE 0x1
+#define T_INVALID 0x0u
+#define T_LVALUE 0x1u
 
-#define T_NUMBER 0x2
-#define T_STRING 0x4
-#define T_REAL 0x80
+#define T_NUMBER 0x2u
+#define T_STRING 0x4u
+#define T_REAL 0x80u
 
-#define T_ARRAY 0x8
-#define T_OBJECT 0x10
-#define T_MAPPING 0x20
-#define T_FUNCTION 0x40
-#ifndef NO_BUFFER_TYPE
-#define T_BUFFER 0x100
-#endif
-#define T_CLASS 0x200
+#define T_ARRAY 0x8u
+#define T_OBJECT 0x10u
+#define T_MAPPING 0x20u
+#define T_FUNCTION 0x40u
+#define T_BUFFER 0x100u
+#define T_CLASS 0x200u
 
-#define T_LVALUE_BYTE 0x400 /* byte-sized lvalue */
-#define T_LVALUE_RANGE 0x800
-#define T_ERROR_HANDLER 0x1000
-#define T_FREED 0x2000
-#define T_REF 0x4000
+#define T_LVALUE_BYTE 0x400u /* byte-sized lvalue */
+#define T_LVALUE_RANGE 0x800u
+#define T_ERROR_HANDLER 0x1000u
+#define T_FREED 0x2000u
+#define T_REF 0x4000u
+#define T_LVALUE_CODEPOINT 0x8000u /* UTF8 codepoint */
 
-#define TYPE_MOD_ARRAY 0x8000 /* Pointer to a basic type */
+#define TYPE_MOD_ARRAY 0x8000u /* Pointer to a basic type */
 /* Note, the following restricts class_num to < 0x40 or 64   */
 /* The reason for this is that vars still have a ushort type */
 /* This restriction is not unreasonable, since LPC is still  */
 /* catered for mini-applications (compared to say, C++ or    */
 /* java)..for now - Sym                                      */
-#define TYPE_MOD_CLASS 0x0080 /* a class */
-#define CLASS_NUM_MASK 0x007f
+#define TYPE_MOD_CLASS 0x0080u /* a class */
+#define CLASS_NUM_MASK 0x007fu
 
-#ifdef NO_BUFFER_TYPE
-#define T_REFED (T_ARRAY | T_OBJECT | T_MAPPING | T_FUNCTION | T_CLASS | T_REF)
-#else
 #define T_REFED (T_ARRAY | T_OBJECT | T_MAPPING | T_FUNCTION | T_BUFFER | T_CLASS | T_REF)
-#endif
 #define T_ANY (T_REFED | T_STRING | T_NUMBER | T_REAL)
 
 /* values for subtype field of svalue struct */
-#define STRING_COUNTED 0x1 /* has a length an ref count */
-#define STRING_HASHED 0x2  /* is in the shared string table */
+#define STRING_COUNTED 0x1u /* has a length an ref count */
+#define STRING_HASHED 0x2u  /* is in the shared string table */
 
 #define STRING_MALLOC STRING_COUNTED
 #define STRING_SHARED (STRING_COUNTED | STRING_HASHED)
-#define STRING_CONSTANT 0
+#define STRING_CONSTANT 0u
 
-#define T_UNDEFINED 0x4 /* undefinedp() returns true */
+#define T_UNDEFINED 0x4u /* undefinedp() returns true */
 
 /* utility function for manipulating svalues */
 
@@ -168,7 +167,7 @@ extern svalue_t const0, const1, const0u;
     if ((x)->subtype == STRING_MALLOC && MSTR_REF((x)->u.string) == 1) {                          \
       ssj_res = (char *)extend_string((x)->u.string, ssj_len);                                    \
       if (!ssj_res) fatal("Out of memory!\n");                                                    \
-      (void) strcpy(ssj_res + ssj_r, (y)->u.string);                                              \
+      (void)strcpy(ssj_res + ssj_r, (y)->u.string);                                               \
       free_string_svalue(y);                                                                      \
     } else {                                                                                      \
       ssj_res = (char *)new_string(ssj_len, z);                                                   \
@@ -180,5 +179,8 @@ extern svalue_t const0, const1, const0u;
     }                                                                                             \
     (x)->u.string = ssj_res;                                                                      \
   })
+
+// Translate svalue into json summary, only suitable for
+json svalue_to_json_summary(const svalue_t *obj, int depth = 0);
 
 #endif /* LPC_SVALUE_H */

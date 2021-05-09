@@ -18,42 +18,50 @@ Please be sure to include these in your bug report.
 - If you can, try to narrow down to a small LPC program that reproduce the
   problem easily. If you can not, Try using Valgrind method first.
 
-### Valgrind
+## GDB
 
-Most of the crashing bug is actually caused by previous silent memory corruption, which it is very hard to detect normally.
+If you have met an crash, the driver should automatically print out an list of backtrace, but sometime that doesn't really contain enough information.
 
-The correct way to detect any sort of memory corruption is to use Valgrind, that way you catch the problem when it happens, not when it causes other problems.
+If you want to catch the crash, try running driver under GDB directly
 
-Here is how you should generate a bug report with Valgrind.
+```shell
+$ gdb --args driver <argumnets>
 
-#### Build driver in development mode
-
-```
-$ ./build.FluffOS develop
-```
-
-#### Install Valgrind and set kernel debug correct parameter
-
-```
-$ sudo apt-get install valgrind
-$ echo 0 > /proc/sys/kernel/yama/ptrace_scope (on ubuntu)
+then in GDB prompt
+> handle SIGPIPE nostop noprint pass
+> run
 ```
 
-#### Launch driver under Valgrind.
+and when you met an crash, do this
 
-    $ Valgrind --leak-check=full --track-origins=yes --db-attach=yes \
-        --malloc-fill=0x75 --free-fill=0x55 ../driver <your config file name>
+```shell
+> bt
+> info locals
+```
 
-#### Login to your lib as usual, do something fishy.
+and paste the result to your issue!
 
-(it will be slow, that is okay) You may also have to relax your `maximum eval cost`
-setting, if necessary. When Valgrind halts and prints out a backtrace with `Invalid read of size 1`, or `Invalid write of size 1`, save the entire stack trace.
+### Sanitizer
 
-Then press "y" and "enter" to drop into GDB, do "bt", and then do "info locals"
-if needed.
+Most of the crashing bug is actually caused by previous silent memory corruption, which it is very hard to detect.
 
-#### Known False Positves
+The currently preferred way to detect any sort of memory corruption is to use Sanitizer, that way you catch the
+ problem when it happens, not when it causes other problems. However it mostly only works under Linux.
 
-Ignore these when you see it happen. Just press `N` or `Enter` to continue.
+Here is how you should generate a bug report with Sanitizer.
 
-- With `HAVE_ZLIB`, on `restore_object()` it will complains `Jump base on uninitialized value` with a stacktrace to `zlib`, this is normal.
+Build driver in sanitizer enabled mode
+
+```shell
+$ cmake .. -DENABLE_SANITIZER=ON
+```
+Launch driver as usual
+
+```shell
+$ ./driver <args>
+```
+
+Login to your lib as usual, do something fishy.
+
+(it will be slow, that is okay) You may also have to relax your `maximum eval cost` setting, if necessary. When
+ Valgrind halts and prints out a backtrace with `Invalid read of size 1`, or `Invalid write of size 1`, save the entire stack trace.

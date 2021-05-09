@@ -7,12 +7,15 @@
 
 #ifndef SRC_BASE_PACKAGE_API_H_
 #define SRC_BASE_PACKAGE_API_H_
+// IWYU pragma: begin_exports
 
 // FIXME: avoid this?
 #include "base/std.h"
 
 // details about machine
 #include "vm/vm.h"
+
+#include "interactive.h"
 
 // FIXME: apply_cache
 #include "vm/internal/base/apply_cache.h"
@@ -21,12 +24,14 @@
 #include "vm/internal/otable.h"
 
 // FIXME: sprintf needs query_instr_name
-#include "vm/internal/compiler/lex.h"
+#include "compiler/internal/lex.h"
 
 // FIXME: disassembler needs icode
-#include "vm/internal/compiler/icode.h"
+#include "compiler/internal/icode.h"
 
 // APIs to LPC programs
+#include "compiler/internal/disassembler.h"
+
 #include "include/localtime.h"
 #ifdef PACKAGE_PARSER
 #include "include/parser_error.h"
@@ -37,8 +42,16 @@
 
 // FIXME: backend queue
 #include "backend.h"
-#include "event.h"
 #include "comm.h"  // reverse API, FIXME
 #include "user.h"  // reverse API
 
+#include "net/telnet.h"  // Telnet related stuff
+
+// trace.cc
+extern struct array_t *get_svalue_trace();
+
+// Tracing support
+#include "base/internal/tracing.h"
+
+// IWYU pragma: end_exports
 #endif /* SRC_BASE_PACKAGE_API_H_ */

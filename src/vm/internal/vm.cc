@@ -9,14 +9,16 @@
 
 #include <cstdlib>
 
+#include "applies_table.autogen.h"
+#include "vm/internal/base/machine.h"  // for reset_machine
 #include "vm/internal/eval_limit.h"
 #include "vm/internal/master.h"
 #include "vm/internal/simul_efun.h"
-#include "vm/internal/base/apply_cache.h"   // for apply_cache_init
-#include "vm/internal/base/machine.h"       // for reset_machine
-#include "vm/internal/compiler/lex.h"       // for add_predefines, fixme!
-#include "vm/internal/compiler/compiler.h"  // for init_locals, fixme!
+#include "vm/internal/simulate.h"
+#include "compiler/internal/lex.h"       // for add_predefines, fixme!
+#include "compiler/internal/compiler.h"  // for init_locals, fixme!
 
+#include "packages/core/add_action.h"
 #include "packages/core/replace_program.h"
 #ifdef PACKAGE_MUDLIB_STATS
 #include "packages/mudlib_stats/mudlib_stats.h"
@@ -34,7 +36,7 @@ void preload_objects() {
   push_number(0);
   auto ret = safe_apply_master_ob(APPLY_EPILOG, 1);
 
-  if ((ret == 0) || (ret == (svalue_t *)-1) || (ret->type != T_ARRAY)) {
+  if ((ret == nullptr) || (ret == (svalue_t *)-1) || (ret->type != T_ARRAY)) {
     return;
   }
 
@@ -53,8 +55,9 @@ void preload_objects() {
     if (prefiles->item[i].type != T_STRING) {
       continue;
     }
-    push_svalue(&prefiles->item[i]);
     debug_message("%s...\n", prefiles->item[i].u.string);
+
+    push_svalue(&prefiles->item[i]);
     set_eval(max_eval_cost);
     safe_apply_master_ob(APPLY_PRELOAD, 1);
   }
@@ -65,6 +68,8 @@ void preload_objects() {
 
 void vm_init() {
   boot_time = get_current_time();
+
+  init_eval(); /* in eval.cc */
 
   init_strings();     /* in stralloc.c */
   init_identifiers(); /* in lex.c */
@@ -77,13 +82,19 @@ void vm_init() {
   reset_machine(1);
 
   set_eval(max_eval_cost);
+
+#ifndef NO_ADD_ACTION
+  init_living(); /* in add_actions.cc */
+#endif
 }
 
 void vm_start() {
   error_context_t econ;
   save_context(&econ);
   try {
+    debug_message("Loading simul_efun file : %s\n", CONFIG_STR(__SIMUL_EFUN_FILE__));
     init_simul_efun(CONFIG_STR(__SIMUL_EFUN_FILE__));
+    debug_message("Loading master file: %s\n", CONFIG_STR(__MASTER_FILE__));
     init_master(CONFIG_STR(__MASTER_FILE__));
   } catch (const char *) {
     debug_message("The simul_efun (%s) and master (%s) objects must be loadable.\n",
@@ -110,11 +121,11 @@ void vm_start() {
  * stack machine execution (as stack will be cleared).
  */
 void clear_state() {
-  current_object = 0;
-  set_command_giver(0);
-  current_interactive = 0;
-  previous_ob = 0;
-  current_prog = 0;
+  current_object = nullptr;
+  set_command_giver(nullptr);
+  current_interactive = nullptr;
+  previous_ob = nullptr;
+  current_prog = nullptr;
   caller_type = 0;
   reset_machine(0); /* Pop down the stack. */
 } /* clear_state() */

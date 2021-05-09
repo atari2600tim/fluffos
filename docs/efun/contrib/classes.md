@@ -3,19 +3,42 @@ layout: default
 title: contrib / classes.pre
 ---
 
-mixed \*classes(object, int default : 0);
+### NAME
 
-returns:
-int == 0: array consisting of names of classes used by object
-int != 0:
-({
-({
-"class_name",
-({
-"member_name",
-"type"
-}),
-...
-}),
-...
-})
+    classes() - return names of classes used by object
+
+### SYNOPSIS
+
+    mixed *classes(object ob, int verbose);
+
+### DESCRIPTION
+
+    Return a string array consisting of names of classes used by <ob>.
+
+    The <verbose> parameter is optional and by default 0.
+
+    If <verbose> is non-zero, then  additional  information  will  be
+    returned.
+
+### EXAMPLE
+
+    string *classes_used = classes( ob ) ;
+    // ({ "class_name", }) ;
+
+    mixed *classes_used = classes( ob, 1 ) ;
+
+    // ({
+    //     ({
+    //         "class_name",
+    //         ({
+    //             "member_name",
+    //             "type"
+    //         }),
+    //         ...
+    //     }),
+    //     ...
+    // })
+
+### SEE ALSO
+
+    num_classes(3)

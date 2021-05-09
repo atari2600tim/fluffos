@@ -6,14 +6,36 @@
 inherit "/inherit/master/valid";
 
 nosave int has_error = 0;
+nosave string last_error = "";
+
+public string clear_last_error() {
+  last_error = "";
+}
+
+public string get_last_error() {
+  return last_error;
+}
 
 void flag(string str) {
+  mixed error;
   switch (str) {
     case "test":
-      "/command/tests"->main();
+      error = catch("/command/tests"->main());
+      if(error) {
+        has_error = 1;
+        write(error);
+      }
+      break;
+    case "speed":
+      error = catch("/command/speed"->main());
+      if(error) {
+        has_error = 1;
+        write(error);
+      }
+      shutdown(0);
       break;
     default:
-      write("The only supproted flag is 'test', got '" + str + "'.\n");
+      write("The only supproted flag is 'test' and 'speed', got '" + str + "'.\n");
       break;
   }
   if (has_error) { shutdown(-1); }
@@ -247,6 +269,7 @@ staticf void error_handler(mapping map, int flag) {
       implode(map_array(map["trace"],
           (: sprintf("Line: %O  File: %O Object: %O Program: %O", $1["line"], $1["file"], $1["object"] || "No object", $1["program"] ||
                      "No program") :)), "\n"));
+  last_error = str;
   write_file("/log/log", str);
   if (!flag && ob) tell_object(ob, str);
 }
@@ -270,4 +293,15 @@ mixed get_include_path(string file)
     default:
       return ({ ":DEFAULT:" });;
   }
+}
+
+int valid_database(object ob, string action, mixed *info) {
+  write("MASTER valid_database called: " + sprintf("ob:%O action:%O info:%O", ob, action, info) + "\n");
+
+  // Approve!
+  return 1;
+}
+
+string object_name(object ob) {
+  return ob->name();
 }

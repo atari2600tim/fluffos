@@ -4,6 +4,7 @@
  */
 #include "base/package_api.h"
 
+#include "base/internal/tracing.h"
 #include "packages/core/file.h"
 
 #include <iostream>
@@ -42,6 +43,8 @@
 #include <zlib.h>
 
 #include "base/internal/strutils.h"
+#include "ghc/filesystem.hpp"
+namespace fs = ghc::filesystem;
 
 /*
  * Credits for some of the code below goes to Free Software Foundation
@@ -64,8 +67,15 @@
 #define S_ISBLK(m) (((m)&S_IFMT) == S_IFBLK)
 #endif
 
+#ifdef _WIN32
+#define lstat(x, y) stat(x, y)
+#define link(x, y) ((-1))
+#define OS_mkdir(x, y) mkdir(x)
+#else
+#define OS_mkdir(x, y) mkdir(x, y)
+#endif
+
 static int match_string(char * /*match*/, char * /*str*/);
-static int copy(const char *from, const char *to);
 static int do_move(const char *from, const char *to, int flag);
 static int pstrcmp(const void * /*p1*/, const void * /*p2*/);
 static int parrcmp(const void * /*p1*/, const void * /*p2*/);
@@ -77,15 +87,15 @@ static void encode_stat(svalue_t * /*vp*/, int /*flags*/, char * /*str*/, struct
  * These are used by qsort in get_dir().
  */
 static int pstrcmp(const void *p1, const void *p2) {
-  svalue_t *x = (svalue_t *)p1;
-  svalue_t *y = (svalue_t *)p2;
+  auto *x = (svalue_t *)p1;
+  auto *y = (svalue_t *)p2;
 
   return strcmp(x->u.string, y->u.string);
 }
 
 static int parrcmp(const void *p1, const void *p2) {
-  svalue_t *x = (svalue_t *)p1;
-  svalue_t *y = (svalue_t *)p2;
+  auto *x = (svalue_t *)p1;
+  auto *y = (svalue_t *)p2;
 
   return strcmp(x->u.arr->item[0].u.string, y->u.arr->item[0].u.string);
 }
@@ -151,13 +161,13 @@ array_t *get_dir(const char *path, int flags) {
   char *p;
 
   if (!path) {
-    return 0;
+    return nullptr;
   }
 
   path = check_valid_path(path, current_object, "stat", 0);
 
-  if (path == 0) {
-    return 0;
+  if (path == nullptr) {
+    return nullptr;
   }
 
   if (strlen(path) < 2) {
@@ -171,7 +181,7 @@ array_t *get_dir(const char *path, int flags) {
     /*
      * If path ends with '/' or "/." remove it
      */
-    if ((p = strrchr(temppath, '/')) == 0) {
+    if ((p = strrchr(temppath, '/')) == nullptr) {
       p = temppath;
     }
     if (p[0] == '/' && ((p[1] == '.' && p[2] == '\0') || p[1] == '\0')) {
@@ -181,7 +191,7 @@ array_t *get_dir(const char *path, int flags) {
 
   if (stat(temppath, &st) < 0) {
     if (*p == '\0') {
-      return 0;
+      return nullptr;
     }
     if (p != temppath) {
       strcpy(regexppath, p + 1);
@@ -199,8 +209,8 @@ array_t *get_dir(const char *path, int flags) {
     encode_stat(&v->item[0], flags, p, &st);
     return v;
   }
-  if ((dirp = opendir(temppath)) == 0) {
-    return 0;
+  if ((dirp = opendir(temppath)) == nullptr) {
+    return nullptr;
   }
   /*
    * Count files
@@ -262,7 +272,7 @@ array_t *get_dir(const char *path, int flags) {
 int remove_file(const char *path) {
   path = check_valid_path(path, current_object, "remove_file", 1);
 
-  if (path == 0) {
+  if (path == nullptr) {
     return 0;
   }
   if (unlink(path) == -1) {
@@ -283,14 +293,14 @@ int write_file(const char *file, const char *str, int flags) {
     return 0;
   }
   if (flags & 2) {
-    gf = gzopen(file, (flags & 1) ? "w" : "a");
+    gf = gzopen(file, (flags & 1) ? "wb" : "ab");
     if (!gf) {
       error("Wrong permissions for opening file /%s for %s.\n\"%s\"\n", file,
             (flags & 1) ? "overwrite" : "append", strerror(errno));
     }
   } else {
-    f = fopen(file, (flags & 1) ? "w" : "a");
-    if (f == 0) {
+    f = fopen(file, (flags & 1) ? "wb" : "ab");
+    if (f == nullptr) {
       error("Wrong permissions for opening file /%s for %s.\n\"%s\"\n", file,
             (flags & 1) ? "overwrite" : "append", strerror(errno));
     }
@@ -317,25 +327,26 @@ char *read_file(const char *file, int start, int lines) {
 
   if (lines < 0) {
     debug(file, "read_file: trying to read negative lines: %d", lines);
-    return 0;
+    return nullptr;
   }
 
   const char *real_file;
 
   real_file = check_valid_path(file, current_object, "read_file", 0);
   if (!real_file) {
-    return 0;
+    return nullptr;
   }
 
-  struct stat st;
+  auto fs_real_file = fs::path(real_file);
+
   /*
    * file doesn't exist, or is really a directory
    */
-  if (stat(real_file, &st) == -1 || (st.st_mode & S_IFDIR)) {
-    return 0;
+  if (!fs::exists(fs_real_file) || fs::is_directory(fs_real_file)) {
+    return nullptr;
   }
 
-  if (st.st_size == 0) {
+  if (fs::is_empty(fs_real_file)) {
     /* zero length file */
     char *result = new_string(0, "read_file: empty");
     result[0] = '\0';
@@ -346,7 +357,7 @@ char *read_file(const char *file, int start, int lines) {
 
   if (f == nullptr) {
     debug(file, "read_file: fail to open: %s.\n", file);
-    return 0;
+    return nullptr;
   }
 
   static char *theBuff = nullptr;
@@ -360,68 +371,86 @@ char *read_file(const char *file, int start, int lines) {
 
   if (total_bytes_read <= 0) {
     debug(file, "read_file: read error: %s.\n", file);
-    return 0;
+    return nullptr;
   }
   theBuff[total_bytes_read] = '\0';
-
-  // skip forward until the "start"-th line
-  char *ptr_start = theBuff;
-  while (start > 1 && ptr_start < theBuff + total_bytes_read) {
-    if (*ptr_start == '\0') {
-      debug(file, "read_file: file contains '\\0': %s.\n", file);
-      return 0;
+  const char *ptr_start = theBuff;
+  
+  if ( start > 1 )
+  {
+    // skip forward until the "start"-th line
+    while (start > 1 && ptr_start < theBuff + total_bytes_read) {
+      if (*ptr_start == '\0') {
+        debug(file, "read_file: file contains '\\0': %s.\n", file);
+        return nullptr;
+      }
+      if (*ptr_start == '\n') {
+        start--;
+      }
+      ptr_start++;
     }
-    if (*ptr_start == '\n') {
-      start--;
+    
+    // not found
+    if (start > 1) {
+      debug(file, "read_file: reached EOF searching for start: %s.\n", file);
+      return nullptr;
     }
-    ptr_start++;
+  }
+  else if ( start < 0 )
+  {
+    // move backwards from end by "start"-th lines
+    ptr_start += total_bytes_read - 1;
+    
+    // account for non-POSIX line endings at end of file, if not POSIX then
+    // move pointer forward so decrementing doesn't clip the last character
+    if ( *ptr_start != '\n' )
+      ptr_start++;
+      
+    while (start < 0 && ptr_start > theBuff) {
+      ptr_start--;
+      if (*ptr_start == '\0') {
+        debug(file, "read_file: file contains '\\0': %s.\n", file);
+        return nullptr;
+      }
+      if (*ptr_start == '\n') {
+        start++;
+      }
+      // move pointer past '\n' if we have enough lines
+      if ( !start ) {
+        ptr_start++;
+      }
+    }  
+    
+    if (start < 0) {
+      ptr_start = theBuff;
+    }
   }
 
-  // not found
-  if (start > 1) {
-    debug(file, "read_file: reached EOF searching for start: %s.\n", file);
-    return 0;
-  }
+  char *ptr_end = (char *)theBuff + total_bytes_read;
 
-  char *ptr_end = nullptr;
-  // search forward for "lines" of '\n' for the end
-  if (lines == 0) {
-    ptr_end = ptr_start + read_file_max_size;
-    if (ptr_end > theBuff + total_bytes_read) {
-      ptr_end = theBuff + total_bytes_read + 1;
-    }
-  } else {
-    ptr_end = ptr_start;
-    while (lines > 0 && ptr_end < theBuff + total_bytes_read) {
+  if (lines > 0) {
+    // continue searching forward for "lines" of '\n'
+    ptr_end = (char *)ptr_start;
+    while (lines > 0 && ptr_end <= theBuff + total_bytes_read) {
       if (*ptr_end++ == '\n') {
         lines--;
       }
     }
-    // not enough lines, directly go to the end.
-    if (lines > 0) {
-      ptr_end = theBuff + total_bytes_read + 1;
-    }
+  }
+
+  // Truncate result to read_file_max_size
+  if (ptr_end > ptr_start + read_file_max_size) {
+    ptr_end = (char *)ptr_start + read_file_max_size;
   }
 
   *ptr_end = '\0';
-  // result is too big.
-  if (strlen(ptr_start) > read_file_max_size) {
-    debug(file, "read_file: result too big: %s.\n", file);
-    return 0;
-  }
 
   bool found_crlf = strchr(ptr_start, '\r') != nullptr;
   if (found_crlf) {
     // Deal with CRLF.
-    std::istringstream input(ptr_start);
-    std::ostringstream output;
-    for (std::string line; std::getline(input, line);) {
-      if (ends_with(line, "\r")) {
-        line = line.substr(0, line.length() - 1);
-      }
-      output << line << std::endl;
-    }
-    return string_copy(output.str().c_str(), "read file: CRLF result");
+    std::string content(ptr_start);
+    ReplaceStringInPlace(content, "\r\n", "\n");
+    return string_copy(content.c_str(), "read file: CRLF result");
   }
   return string_copy(ptr_start, "read_file: result");
 }
@@ -435,15 +464,15 @@ char *read_bytes(const char *file, int start, int len, int *rlen) {
   int size;
 
   if (len < 0) {
-    return 0;
+    return nullptr;
   }
   file = check_valid_path(file, current_object, "read_bytes", 0);
   if (!file) {
-    return 0;
+    return nullptr;
   }
   fptr = fopen(file, "rb");
-  if (fptr == NULL) {
-    return 0;
+  if (fptr == nullptr) {
+    return nullptr;
   }
   if (fstat(fileno(fptr), &st) == -1) {
     fatal("Could not stat an open file.\n");
@@ -459,11 +488,11 @@ char *read_bytes(const char *file, int start, int len, int *rlen) {
   if (len > max_byte_transfer) {
     fclose(fptr);
     error("Transfer exceeded maximum allowed number of bytes.\n");
-    return 0;
+    return nullptr;
   }
   if (start >= size) {
     fclose(fptr);
-    return 0;
+    return nullptr;
   }
   if ((start + len) > size) {
     len = (size - start);
@@ -471,7 +500,7 @@ char *read_bytes(const char *file, int start, int len, int *rlen) {
 
   if ((size = fseek(fptr, start, 0)) < 0) {
     fclose(fptr);
-    return 0;
+    return nullptr;
   }
 
   str = new_string(len, "read_bytes: str");
@@ -482,7 +511,7 @@ char *read_bytes(const char *file, int start, int len, int *rlen) {
 
   if (size <= 0) {
     FREE_MSTR(str);
-    return 0;
+    return nullptr;
   }
   /*
    * The string has to end to '\0'!!!
@@ -519,7 +548,7 @@ int write_bytes(const char *file, int start, const char *str, int theLength) {
   } else {
     fptr = fopen(file, "r+b");
   }
-  if (fptr == NULL) {
+  if (fptr == nullptr) {
     return 0;
   }
   if (fstat(fileno(fptr), &st) == -1) {
@@ -589,8 +618,8 @@ const char *check_valid_path(const char *path, object_t *call_object, const char
     return path;
   }
 
-  if (call_object == 0 || call_object->flags & O_DESTRUCTED) {
-    return 0;
+  if (call_object == nullptr || call_object->flags & O_DESTRUCTED) {
+    return nullptr;
   }
 
   copy_and_push_string(path);
@@ -603,11 +632,11 @@ const char *check_valid_path(const char *path, object_t *call_object, const char
   }
 
   if (v == (svalue_t *)-1) {
-    v = 0;
+    v = nullptr;
   }
 
   if (v && v->type == T_NUMBER && v->u.number == 0) {
-    return 0;
+    return nullptr;
   }
   if (v && v->type == T_STRING) {
     path = v->u.string;
@@ -630,7 +659,7 @@ const char *check_valid_path(const char *path, object_t *call_object, const char
     return path;
   }
 
-  return 0;
+  return nullptr;
 }
 
 static int match_string(char *match, char *str) {
@@ -679,71 +708,6 @@ again:
 
 static struct stat to_stats, from_stats;
 
-static int copy(const char *from, const char *to) {
-  int ifd;
-  int ofd;
-  char buf[1024 * 8];
-  int len; /* Number of bytes read into `buf'. */
-
-  if (!S_ISREG(from_stats.st_mode)) {
-    return 1;
-  }
-  if (unlink(to) && errno != ENOENT) {
-    return 1;
-  }
-  ifd = open(from, O_RDONLY);
-  if (ifd < 0) {
-    return errno;
-  }
-  ofd = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-  if (ofd < 0) {
-    close(ifd);
-    return 1;
-  }
-  if (fchmod(ofd, from_stats.st_mode & 0777)) {
-    close(ifd);
-    close(ofd);
-    unlink(to);
-    return 1;
-  }
-  while ((len = read(ifd, buf, sizeof(buf))) > 0) {
-    int wrote = 0;
-    char *bp = buf;
-
-    do {
-      wrote = write(ofd, bp, len);
-      if (wrote < 0) {
-        close(ifd);
-        close(ofd);
-        unlink(to);
-        return 1;
-      }
-      bp += wrote;
-      len -= wrote;
-    } while (len > 0);
-  }
-  if (len < 0) {
-    close(ifd);
-    close(ofd);
-    unlink(to);
-    return 1;
-  }
-  if (close(ifd) < 0) {
-    close(ofd);
-    return 1;
-  }
-  if (close(ofd) < 0) {
-    return 1;
-  }
-#ifdef FCHMOD_MISSING
-  if (chmod(to, from_stats.st_mode & 0777)) {
-    return 1;
-  }
-#endif
-
-  return 0;
-}
-
 /* Move FROM onto TO.  Handles cross-filesystem moves.
    If TO is a directory, FROM must be also.
    Return 0 if successful, 1 if an error occurred.  */
@@ -755,7 +719,11 @@ static int do_move(const char *from, const char *to, int flag) {
     return 1;
   }
   if (lstat(to, &to_stats) == 0) {
+#ifdef __WIN32
+    if (strcmp(from, to) == 0) {
+#else
     if (from_stats.st_dev == to_stats.st_dev && from_stats.st_ino == to_stats.st_ino) {
+#endif
       error("`/%s' and `/%s' are the same file", from, to);
       return 1;
     }
@@ -767,8 +735,12 @@ static int do_move(const char *from, const char *to, int flag) {
     error("/%s: unknown error\n", to);
     return 1;
   }
-  if ((flag == F_RENAME) && (rename(from, to) == 0)) {
-    return 0;
+  if (flag == F_RENAME) {
+    std::error_code errorCode;
+    fs::rename(from, to, errorCode);
+    if (!errorCode) {
+      return 0;
+    }
   }
 #ifdef F_LINK
   else if (flag == F_LINK) {
@@ -787,9 +759,8 @@ static int do_move(const char *from, const char *to, int flag) {
     return 1;
   }
   /* rename failed on cross-filesystem link.  Copy the file instead. */
-
   if (flag == F_RENAME) {
-    if (copy(from, to)) {
+    if (copy_file(from, to)) {
       return 1;
     }
     if (unlink(from)) {
@@ -900,10 +871,6 @@ int do_rename(const char *fr, const char *t, int flag) {
 #endif /* F_RENAME */
 
 int copy_file(const char *from, const char *to) {
-  char buf[128];
-  int from_fd, to_fd;
-  int num_read, num_written;
-  char *write_ptr;
   extern svalue_t apply_ret_value;
 
   from = check_valid_path(from, current_object, "move_file", 0);
@@ -912,10 +879,10 @@ int copy_file(const char *from, const char *to) {
   to = check_valid_path(to, current_object, "move_file", 1);
   assign_svalue(&to_sv, &apply_ret_value);
 
-  if (from == 0) {
+  if (from == nullptr) {
     return -1;
   }
-  if (to == 0) {
+  if (to == nullptr) {
     return -2;
   }
 
@@ -924,18 +891,17 @@ int copy_file(const char *from, const char *to) {
     return 1;
   }
   if (lstat(to, &to_stats) == 0) {
+#ifdef __WIN32
+    if (!strcmp(from, to)) {
+#else
     if (from_stats.st_dev == to_stats.st_dev && from_stats.st_ino == to_stats.st_ino) {
+#endif
       error("`/%s' and `/%s' are the same file", from, to);
       return 1;
     }
   } else if (errno != ENOENT) {
     error("/%s: unknown error\n", to);
     return 1;
-  }
-
-  from_fd = open(from, O_RDONLY);
-  if (from_fd < 0) {
-    return -1;
   }
 
   if (file_size(to) == -2) {
@@ -949,37 +915,20 @@ int copy_file(const char *from, const char *to) {
     } else {
       cp = from;
     }
-
     sprintf(newto, "%s/%s", to, cp);
-    close(from_fd);
     return copy_file(from, newto);
   }
-  to_fd = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-  if (to_fd < 0) {
-    close(from_fd);
-    return -2;
+
+  std::error_code error_code;
+  auto base = fs::current_path();
+  fs::copy_file(base / from, base / to, fs::copy_options::overwrite_existing, error_code);
+
+  if (error_code) {
+    debug_message("Error copying file from /%s to /%s, Error: %s", from, to,
+                  error_code.message().c_str());
+    return -1;
   }
-  while ((num_read = read(from_fd, buf, 128)) != 0) {
-    if (num_read < 0) {
-      debug_perror("copy_file: read", from);
-      close(from_fd);
-      close(to_fd);
-      return -3;
-    }
-    write_ptr = buf;
-    while (write_ptr != (buf + num_read)) {
-      num_written = write(to_fd, write_ptr, num_read);
-      if (num_written < 0) {
-        debug_perror("copy_file: write", to);
-        close(from_fd);
-        close(to_fd);
-        return -3;
-      }
-      write_ptr += num_written;
-    }
-  }
-  close(from_fd);
-  close(to_fd);
+
   return 1;
 }
 
@@ -997,6 +946,20 @@ void f_cp(void) {
 #ifdef F_FILE_SIZE
 void f_file_size(void) {
   LPC_INT i = file_size(sp->u.string);
+
+  // cross platform fix
+#ifdef _WIN32
+  if (i == -1 && sp->u.string[SVALUE_STRLEN(sp) - 1] == '/') {
+    auto len = SVALUE_STRLEN(sp);
+    auto tmp = string_copy(sp->u.string, "f_file_size");
+    tmp[len - 1] = '\0';
+    if (file_size(tmp) == -2) {
+      i = -2;
+    }
+    FREE_MSTR(tmp);
+  }
+#endif
+
   free_string_svalue(sp);
   put_number(i);
 }
@@ -1041,7 +1004,7 @@ void f_mkdir(void) {
   const char *path;
 
   path = check_valid_path(sp->u.string, current_object, "mkdir", 1);
-  if (!path || mkdir(path, 0770) == -1) {
+  if (!path || OS_mkdir(path, 0770) == -1) {
     free_string_svalue(sp);
     *sp = const0;
   } else {

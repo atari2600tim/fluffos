@@ -2,6 +2,7 @@
 
 #include <sys/stat.h>  // for struct stat
 
+#include "packages/core/heartbeat.h"
 #include "packages/core/add_action.h"
 #include "packages/core/file.h"
 
@@ -10,7 +11,7 @@
 /* should be done in configure */
 
 #ifdef F_REAL_TIME
-void f_real_time(void) { push_number(time(NULL)); }
+void f_real_time(void) { push_number(time(nullptr)); }
 #endif
 
 #ifdef F_COMPRESSEDP
@@ -49,7 +50,7 @@ void f_named_livings() {
   obtab = reinterpret_cast<object_t **>(
       DCALLOC(max_array_size, sizeof(object_t *), TAG_TEMPORARY, "named_livings"));
 
-  for (i = 0; i < CFG_LIVING_HASH_SIZE; i++) {
+  for (i = 0; i < CONFIG_INT(__LIVING_HASH_TABLE_SIZE__); i++) {
     for (ob = hashed_living[i]; ob; ob = ob->next_hashed_living) {
       if (!(ob->flags & O_ENABLE_COMMANDS)) {
         continue;
@@ -95,7 +96,7 @@ void f_remove_shadow(void) {
     ob = sp->u.ob;
     pop_stack();
   }
-  if (ob == 0 || (ob->shadowing == 0 && ob->shadowed == 0)) {
+  if (ob == nullptr || (ob->shadowing == nullptr && ob->shadowed == nullptr)) {
     push_number(0);
   } else {
     if (ob->shadowed) {
@@ -104,7 +105,7 @@ void f_remove_shadow(void) {
     if (ob->shadowing) {
       ob->shadowing->shadowed = ob->shadowed;
     }
-    ob->shadowing = ob->shadowed = 0;
+    ob->shadowing = ob->shadowed = nullptr;
     push_number(1);
   }
 }
@@ -114,7 +115,7 @@ void f_remove_shadow(void) {
    when I added it (added function support, etc) -Beek */
 #ifdef F_QUERY_NOTIFY_FAIL
 void f_query_notify_fail(void) {
-  char *p;
+  const char *p;
 
   if (command_giver && command_giver->interactive) {
     if (command_giver->interactive->iflags & NOTIFY_FAIL_FUNC) {
@@ -140,7 +141,7 @@ void f_store_variable(void) {
   svalue_t *sv;
   unsigned short type;
 
-  const char *name = NULL;
+  const char *name = nullptr;
   object_t *ob;
 
   if (st_num_arg == 3) {
@@ -154,9 +155,8 @@ void f_store_variable(void) {
   }
 
   idx = find_global_variable(ob->prog, name, &type, 0);
-  if (idx == -1 || (type & DECL_PRIVATE)) {
-    error("No variable named '%s'!\n", name);
-    return;
+  if (idx == -1 || (ob != current_object && (type & DECL_PRIVATE))) {
+    error("Variable named '%s' does not exist or is not visible!\n", name);
   }
   assign_svalue(&ob->variables[idx], sv);
   pop_n_elems(st_num_arg);
@@ -168,7 +168,7 @@ void f_fetch_variable(void) {
   int idx;
   unsigned short type;
 
-  const char *name = NULL;
+  const char *name = nullptr;
   object_t *ob;
 
   if (st_num_arg == 2) {
@@ -181,8 +181,8 @@ void f_fetch_variable(void) {
 
   idx = find_global_variable(ob->prog, name, &type, 0);
 
-  if (idx == -1 || (type & DECL_PRIVATE)) {
-    error("No variable named '%s'!\n", name);
+  if (idx == -1 || (ob != current_object && (type & DECL_PRIVATE))) {
+    error("Variable named '%s' does not exist or is not visible!\n", name);
   }
   pop_n_elems(st_num_arg);
   push_svalue(&ob->variables[idx]);
@@ -299,13 +299,11 @@ static void deep_copy_svalue(svalue_t *from, svalue_t *to) {
       to->u.map = deep_copy_mapping(from->u.map);
       depth--;
       break;
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER:
       *to = *from;
       to->u.buf = allocate_buffer(from->u.buf->size);
       memcpy(to->u.buf->item, from->u.buf->item, from->u.buf->size);
       break;
-#endif
     default:
       assign_svalue_no_free(to, from);
   }
@@ -349,7 +347,7 @@ void f_functions(void) {
   i = num;
 
   while (i--) {
-    unsigned short low, high, mid;
+    unsigned short low = 0, high = 0, mid = 0;
 
     prog = sp->u.ob->prog;
     ind = i + offset;
@@ -383,7 +381,7 @@ void f_functions(void) {
       if (prog->type_start && prog->type_start[ind] != INDEX_START_NONE) {
         types = &prog->argument_types[prog->type_start[ind]];
       } else {
-        types = 0;
+        types = nullptr;
       }
 
       vec->item[i].type = T_ARRAY;
@@ -397,14 +395,16 @@ void f_functions(void) {
       subvec->item[1].subtype = 0;
       subvec->item[1].u.number = funp->num_arg;
 
-      get_type_name(buf, end, funp->type);
+      auto p = get_type_name(buf, end, funp->type);
+      *(p - 1) = '\0';  // get rid of last space
       subvec->item[2].type = T_STRING;
       subvec->item[2].subtype = STRING_SHARED;
       subvec->item[2].u.string = make_shared_string(buf);
 
       for (j = 0; j < funp->num_arg; j++) {
         if (types) {
-          get_type_name(buf, end, types[j]);
+          auto p = get_type_name(buf, end, types[j]);
+          *(p - 1) = '\0';  // get rid of last space
           subvec->item[3 + j].type = T_STRING;
           subvec->item[3 + j].subtype = STRING_SHARED;
           subvec->item[3 + j].u.string = make_shared_string(buf);
@@ -443,7 +443,8 @@ static void fv_recurse(array_t *arr, int *idx, program_t *prog, int type, int fl
       subarr->item[0].type = T_STRING;
       subarr->item[0].subtype = STRING_SHARED;
       subarr->item[0].u.string = ref_string(prog->variable_table[i]);
-      get_type_name(buf, end, prog->variable_types[i]);
+      auto p = get_type_name(buf, end, prog->variable_types[i]);
+      *(p - 1) = '\0';  // get rid of last space
       subarr->item[1].type = T_STRING;
       subarr->item[1].subtype = STRING_SHARED;
       subarr->item[1].u.string = make_shared_string(buf);
@@ -535,8 +536,8 @@ void f_terminal_colour(void) {
   char colouratstartword[MAX_COLOUR_STRING];
   int curcolourlen;
   int colourstartlen = 0;
-  const char *resetstr = 0;
-  char *resetstrname;
+  const char *resetstr = nullptr;
+  const char *resetstrname;
   int resetstrlen = 0;
   int num, i, j, k, col, start, space, *lens, maybe_at_end;
   int space_garbage = 0;
@@ -578,13 +579,13 @@ void f_terminal_colour(void) {
       cp++;
     }
   } while (cp);
-  if (cp == NULL) {
+  if (cp == nullptr) {
     if (wrap) {
       num = 1;
       parts = reinterpret_cast<const char **>(
           DCALLOC(1, sizeof(char *), TAG_TEMPORARY, "f_terminal_colour: parts"));
       parts[0] = instr;
-      savestr = 0;
+      savestr = nullptr;
     } else {
       pop_stack(); /* no delimiter in string, so return the original */
       return;
@@ -1017,8 +1018,8 @@ void f_terminal_colour(void) {
 #ifndef DEBUG
   if (ncp - deststr != j) {
     fatal(
-        "Length miscalculated in terminal_colour()\n    Expected: %i Was: %i\n "
-        "   String: %s\n    Indent: %i Wrap: %i\n",
+        "Length miscalculated in terminal_colour()\n    Expected: %d Was: %td\n "
+        "   String: %s\n    Indent: %" LPC_INT_FMTSTR_P " Wrap: %" LPC_INT_FMTSTR_P "\n",
         j, ncp - deststr, sp->u.string, indent, wrap);
   }
 #endif
@@ -1049,7 +1050,7 @@ static char *pluralize(const char *str) {
 
   sz = strlen(str);
   if (!sz) {
-    return 0;
+    return nullptr;
   }
 
   /* if it is of the form 'X of Y', pluralize the 'X' part */
@@ -1607,7 +1608,7 @@ void f_replaceable(void) {
   object_t *obj;
   program_t *prog;
   int i, j, num, numignore, replaceable;
-  char **ignore;
+  const char **ignore;
 
   if (st_num_arg == 2) {
     obj = (sp - 1)->u.ob;
@@ -1622,10 +1623,10 @@ void f_replaceable(void) {
     if (st_num_arg == 2) {
       numignore = sp->u.arr->size;
       if (numignore) {
-        ignore = reinterpret_cast<char **>(
+        ignore = reinterpret_cast<const char **>(
             DCALLOC(numignore + 2, sizeof(char *), TAG_TEMPORARY, "replaceable"));
       } else {
-        ignore = 0;
+        ignore = nullptr;
       }
       ignore[0] = findstring(APPLY_CREATE);
       ignore[1] = findstring(APPLY___INIT);
@@ -1633,13 +1634,14 @@ void f_replaceable(void) {
         if (sp->u.arr->item[i].type == T_STRING) {
           ignore[i + 2] = findstring(sp->u.arr->item[i].u.string);
         } else {
-          ignore[i + 2] = 0;
+          ignore[i + 2] = nullptr;
         }
       }
       numignore += 2;
     } else {
       numignore = 2;
-      ignore = reinterpret_cast<char **>(DCALLOC(2, sizeof(char *), TAG_TEMPORARY, "replaceable"));
+      ignore =
+          reinterpret_cast<const char **>(DCALLOC(2, sizeof(char *), TAG_TEMPORARY, "replaceable"));
       ignore[0] = findstring(APPLY_CREATE);
       ignore[1] = findstring(APPLY___INIT);
     }
@@ -1790,7 +1792,7 @@ void f_remove_interactive(void) {
  */
 #ifdef F_QUERY_IP_PORT
 static int query_ip_port(object_t *ob) {
-  if (!ob || ob->interactive == 0) {
+  if (!ob || ob->interactive == nullptr) {
     return 0;
   }
   return ob->interactive->local_port;
@@ -1820,12 +1822,12 @@ void f_query_ip_port(void) {
 
 #if defined F_ZONETIME || defined F_IS_DAYLIGHT_SAVINGS_TIME
 
-char *set_timezone(const char *timezone) {
+const char *set_timezone(const char *new_tz) {
   static char put_tz[80];
   char *old_tz;
 
   old_tz = getenv("TZ");
-  sprintf(put_tz, "TZ=%s", timezone);
+  snprintf(put_tz, sizeof(put_tz) / sizeof(char), "TZ=%s", new_tz);
   putenv(put_tz);
   tzset();
   return old_tz;
@@ -1834,15 +1836,15 @@ char *set_timezone(const char *timezone) {
 void reset_timezone(const char *old_tz) {
   static char put_tz[80];
   if (old_tz) {
-    sprintf(put_tz, "TZ=%s", old_tz);
+    snprintf(put_tz, sizeof(put_tz) / sizeof(char), "TZ=%s", old_tz);
     putenv(put_tz);
   } else {
-#ifndef MINGW
+#ifndef __MINGW32__
     unsetenv("TZ");
-  }
 #else
     putenv("TZ=");
 #endif
+  }
 
   tzset();
 }
@@ -1850,20 +1852,20 @@ void reset_timezone(const char *old_tz) {
 #endif
 
 #ifdef F_ZONETIME
-
 void f_zonetime(void) {
-  const char *timezone, *old_tz;
+  const char *new_tz, *old_tz;
   char *retv;
   time_t time_val;
   int len;
 
   time_val = sp->u.number;
   pop_stack();
-  timezone = sp->u.string;
+  new_tz = sp->u.string;
   pop_stack();
 
-  old_tz = set_timezone(timezone);
-  retv = ctime(&time_val);
+  old_tz = set_timezone(new_tz);
+  char buf[256] = {};
+  retv = ctime_r(&time_val, buf);
   if (!retv) {
     reset_timezone(old_tz);
     error("bad argument to zonetime.");
@@ -1878,21 +1880,18 @@ void f_zonetime(void) {
 
 #ifdef F_IS_DAYLIGHT_SAVINGS_TIME
 void f_is_daylight_savings_time(void) {
-  struct tm *t;
-  const char *timezone;
-  char *old_tz;
-
   time_t time_to_check = sp->u.number;
   pop_stack();
-  timezone = sp->u.string;
+  const char *new_tz = sp->u.string;
   pop_stack();
 
-  old_tz = set_timezone(timezone);
+  const char *old_tz = set_timezone(new_tz);
 
   if (time_to_check < 0) {
     time_to_check = 0;
   }
-  t = localtime(&time_to_check);
+  struct tm res = {};
+  struct tm *t = localtime_r(&time_to_check, &res);
   if (t) {
     push_number((t->tm_isdst) > 0);
   } else {
@@ -1978,9 +1977,8 @@ static int memory_share(svalue_t *sv) {
     case T_STRING:
       switch (sv->subtype) {
         case STRING_MALLOC:
-          return total +
-                 (1 + COUNTED_STRLEN(sv->u.string) + sizeof(malloc_block_t)) /
-                     (COUNTED_REF(sv->u.string));
+          return total + (1 + COUNTED_STRLEN(sv->u.string) + sizeof(malloc_block_t)) /
+                             (COUNTED_REF(sv->u.string));
         case STRING_SHARED:
           return total +
                  (1 + COUNTED_STRLEN(sv->u.string) + sizeof(block_t)) / (COUNTED_REF(sv->u.string));
@@ -2042,11 +2040,9 @@ static int memory_share(svalue_t *sv) {
       calldepth--;
       return total + subtotal / sv->u.fp->hdr.ref;
     }
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER:
       /* first byte is stored inside the buffer struct */
       return total + (sizeof(buffer_t) + sv->u.buf->size - 1) / sv->u.buf->ref;
-#endif
   }
   return total;
 }
@@ -2107,7 +2103,7 @@ void f_memory_summary(void) {
 /* Marius */
 #ifdef F_QUERY_REPLACED_PROGRAM
 void f_query_replaced_program(void) {
-  char *res = 0;
+  char *res = nullptr;
 
   if (st_num_arg) {
     if (sp->u.ob->replaced_program) {
@@ -2144,7 +2140,7 @@ void f_network_stats(void) {
 #ifndef PACKAGE_SOCKETS
   m = allocate_mapping(ports + 4);
 #else
-    m = allocate_mapping(ports + 8);
+  m = allocate_mapping(ports + 8);
 #endif
 
   add_mapping_pair(m, "incoming packets total", inet_in_packets);
@@ -2394,7 +2390,7 @@ void f_base_name(void) {
 
   pop_stack();
 
-  if ((tmp = strchr(name, '#')) != NULL) {
+  if ((tmp = strchr(name, '#')) != nullptr) {
     char *ret;
     i = tmp - name;
     ret = new_string(i, "f_base_name: ret");
@@ -2416,9 +2412,9 @@ int garbage_check(object_t *ob, void *data) {
 #if defined NO_ENVIRONMENT && !defined NO_SHADOWS
          && !ob->shadowing
 #elif !defined NO_ENVIRONMENT && defined NO_SHADOWS
-           && !ob->super
+         && !ob->super
 #elif !defined NO_ENVIRONMENT && !defined NO_SHADOWS
-           && !(ob->super || ob->shadowing)
+         && !(ob->super || ob->shadowing)
 #endif
       ;
 }
@@ -2429,7 +2425,7 @@ void f_get_garbage(void) {
   int count, i;
   object_t **obs;
   array_t *ret;
-  get_objects(&obs, &count, garbage_check, 0);
+  get_objects(&obs, &count, garbage_check, nullptr);
 
   if (count > max_array_size) {
     count = max_array_size;
@@ -2845,7 +2841,7 @@ void f_string_difference() {
 #ifdef F_QUERY_CHARMODE
 static int query_charmode(object_t *ob) {
   int ret;
-  if (!ob || ob->interactive == 0) {
+  if (!ob || ob->interactive == nullptr) {
     ret = -2;
   } else {
     ret = (ob->interactive->iflags & I_SINGLE_CHAR);
@@ -2868,7 +2864,7 @@ void f_query_charmode(void) {
 #ifdef F_REMOVE_CHARMODE
 static int remove_charmode(object_t *ob) {
   int ret;
-  if (!ob || ob->interactive == 0) {
+  if (!ob || ob->interactive == nullptr) {
     ret = -2;
   } else {
     ret = (ob->interactive->iflags &= ~I_SINGLE_CHAR);
@@ -2893,7 +2889,7 @@ void f_remove_charmode(void) {
 #endif
 #ifdef F_REMOVE_GET_CHAR
 static int remove_get_char(object_t *ob) {
-  if (!ob || ob->interactive == 0) {
+  if (!ob || ob->interactive == nullptr) {
     return -2;
   }
 
@@ -2902,9 +2898,9 @@ static int remove_get_char(object_t *ob) {
     if (ob->interactive->num_carry > 0) {
       free_some_svalues(ob->interactive->carryover, ob->interactive->num_carry);
     }
-    ob->interactive->carryover = NULL;
+    ob->interactive->carryover = nullptr;
     ob->interactive->num_carry = 0;
-    ob->interactive->input_to = 0;
+    ob->interactive->input_to = nullptr;
     return 1;
   }
   return -1;
@@ -3006,7 +3002,8 @@ void f_classes() {
             make_shared_string(prog->strings[prog->class_members[offset].membername]);
 
         // ...and type.
-        get_type_name(buf, end, prog->class_members[offset].type);
+        auto p = get_type_name(buf, end, prog->class_members[offset].type);
+        *(p - 1) = '\0';  // get rid of last space
         subsubvec->item[1].type = T_STRING;
         subsubvec->item[1].subtype = STRING_SHARED;
         subsubvec->item[1].u.string = make_shared_string(buf);

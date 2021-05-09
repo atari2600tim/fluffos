@@ -4,19 +4,28 @@
 
 #include <event2/event.h>
 #include <event2/dns.h>
-
-static struct evdns_base *g_dns_base = NULL;
+#include <event2/util.h>
+#ifdef _WIN32
+#include <ws2ipdef.h>
+#include <ws2tcpip.h>
+#endif
+static struct evdns_base *g_dns_base = nullptr;
 
 void init_dns_event_base(struct event_base *base) {
   // Configure a DNS resolver with default nameserver
-  g_dns_base = evdns_base_new(base, 1);
+  g_dns_base = evdns_base_new(base, EVDNS_BASE_INITIALIZE_NAMESERVERS);
+
+#ifdef _WIN32
+  // Hack: force loading localhost entires
+  evdns_base_load_hosts(g_dns_base, nullptr);
+#endif
 }
 
-static void add_ip_entry(struct sockaddr * /*addr*/, socklen_t size, char * /*name*/);
+static void add_ip_entry(struct sockaddr * /*addr*/, ev_socklen_t size, char * /*name*/);
 
 typedef struct addr_name_query_s {
   sockaddr_storage addr;
-  socklen_t addrlen;
+  ev_socklen_t addrlen;
   struct evdns_request *req;
 } addr_name_query_t;
 
@@ -54,8 +63,8 @@ void query_name_by_addr(object_t *ob) {
     in6_addr *addr6 = &((reinterpret_cast<sockaddr_in6 *>(&query->addr))->sin6_addr);
     if (IN6_IS_ADDR_V4MAPPED(addr6) || IN6_IS_ADDR_V4COMPAT(addr6)) {
       in_addr *addr4 = &(reinterpret_cast<in_addr *>(addr6))[3];
-      debug(dns, "Found mapped v4 address, using extracted v4 address to resolve.\n") query->req =
-          evdns_base_resolve_reverse(g_dns_base, addr4, 0, on_addr_name_result, query);
+      debug(dns, "Found mapped v4 address, using extracted v4 address to resolve.\n");
+      query->req = evdns_base_resolve_reverse(g_dns_base, addr4, 0, on_addr_name_result, query);
     } else {
       query->req =
           evdns_base_resolve_reverse_ipv6(g_dns_base, addr6, 0, on_addr_name_result, query);
@@ -68,7 +77,7 @@ void query_name_by_addr(object_t *ob) {
 
 struct addr_number_query {
   LPC_INT key;
-  char *name;
+  const char *name;
   svalue_t call_back;
   object_t *ob_to_call;
   evdns_getaddrinfo_request *req;
@@ -84,33 +93,48 @@ void on_query_addr_by_name_finish(addr_number_query *query) {
     push_undefined();
     push_undefined();
   } else {
-    // push the name
-    copy_and_push_string(query->name);
-
-    // push IP address
-    char host[NI_MAXHOST];
-    int ret = getnameinfo(query->res->ai_addr, query->res->ai_addrlen, host, sizeof(host), NULL, 0,
-                          NI_NUMERICHOST);
-    if (!ret) {
-      copy_and_push_string(host);
-    } else {
-      debug(dns, "on_query_addr_by_name_finish: getnameinfo: %s \n", gai_strerror(ret));
-      push_undefined();
+    auto result = query->res;
+#ifndef IPV6
+    // Skip to first IPv4 result.
+    while (result != nullptr && result->ai_family != AF_INET) {
+      debug(dns, "Skipping IPv6 results %s -> %s \n", query->name,
+            sockaddr_to_string(result->ai_addr, result->ai_addrlen));
+      result = result->ai_next;
     }
-    debug(dns, "DNS lookup success: id %" LPC_INT_FMTSTR_P ": %s -> %s \n", query->key, query->name,
-          host);
+#endif
+    if (result == nullptr) {
+      debug(dns, "%" LPC_INT_FMTSTR_P ": DNS lookup success but no suitable result.\n", query->key);
+      push_undefined();
+      push_undefined();
+    } else {
+      // push the name
+      copy_and_push_string(query->name);
+
+      // push IP address
+      char host[NI_MAXHOST];
+      int ret = getnameinfo(result->ai_addr, result->ai_addrlen, host, sizeof(host), nullptr, 0,
+                            NI_NUMERICHOST);
+      if (!ret) {
+        copy_and_push_string(host);
+      } else {
+        debug(dns, "on_query_addr_by_name_finish: getnameinfo: %s \n", evutil_gai_strerror(ret));
+        push_undefined();
+      }
+      debug(dns, "DNS lookup success: id %" LPC_INT_FMTSTR_P ": %s -> %s \n", query->key,
+            query->name, host);
+    }
   }
 
   // push the key
   push_number(query->key);
-
+  set_eval(max_eval_cost);
   if (query->call_back.type == T_STRING) {
     safe_apply(query->call_back.u.string, query->ob_to_call, 3, ORIGIN_INTERNAL);
   } else {
     safe_call_function_pointer(query->call_back.u.fp, 3);
   }
 
-  if (query->res != NULL) evutil_freeaddrinfo(query->res);
+  if (query->res != nullptr) evutil_freeaddrinfo(query->res);
 
   free_string(query->name);
   free_svalue(&query->call_back, "on_addr_result");
@@ -125,19 +149,19 @@ void on_getaddr_result(int err, evutil_addrinfo *res, void *arg) {
   query->res = res;
 
   // Schedule an immediate event to call LPC callback.
-  add_gametick_event(std::chrono::milliseconds(0), std::bind(on_query_addr_by_name_finish, query));
+  add_gametick_event(std::chrono::milliseconds(0),
+                     [=] { return on_query_addr_by_name_finish(query); });
 }
 
 /*
  * Try to resolve "name" and call the callback when finish.
  */
 int query_addr_by_name(const char *name, svalue_t *call_back) {
-  static int key = 0;
+  static unsigned int key = 0;
 
-  struct evutil_addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
+  struct evutil_addrinfo hints = {0};
   hints.ai_family = AF_UNSPEC;
-  hints.ai_flags = 0;  // EVUTIL_AI_V4MAPPED | EVUTIL_AI_ADDRCONFIG;
+  hints.ai_flags = EVUTIL_AI_ADDRCONFIG;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_protocol = 0;
 
@@ -151,7 +175,7 @@ int query_addr_by_name(const char *name, svalue_t *call_back) {
 
   add_ref(current_object, "query_addr_number: ");
 
-  query->req = evdns_getaddrinfo(g_dns_base, name, NULL, &hints, on_getaddr_result, query);
+  query->req = evdns_getaddrinfo(g_dns_base, name, nullptr, &hints, on_getaddr_result, query);
 
   debug(dns, "DNS lookup scheduled: %" LPC_INT_FMTSTR_P ", %s\n", query->key, name);
 
@@ -162,7 +186,7 @@ int query_addr_by_name(const char *name, svalue_t *call_back) {
 typedef struct {
   struct sockaddr_storage addr;
   socklen_t addrlen;
-  char *name;
+  const char *name;
 } ipentry_t;
 
 static ipentry_t iptable[IPSIZE];
@@ -182,11 +206,11 @@ void mark_iptable() {
 const char *query_ip_name(object_t *ob) {
   int i;
 
-  if (ob == 0) {
+  if (ob == nullptr) {
     ob = command_giver;
   }
-  if (!ob || ob->interactive == 0) {
-    return NULL;
+  if (!ob || ob->interactive == nullptr) {
+    return nullptr;
   }
   for (i = 0; i < IPSIZE; i++) {
     if (iptable[i].addrlen == ob->interactive->addrlen &&
@@ -217,14 +241,14 @@ static void add_ip_entry(struct sockaddr *addr, socklen_t size, char *name) {
 }
 
 const char *query_ip_number(object_t *ob) {
-  if (ob == 0) {
+  if (ob == nullptr) {
     ob = command_giver;
   }
-  if (!ob || ob->interactive == 0) {
-    return 0;
+  if (!ob || ob->interactive == nullptr) {
+    return nullptr;
   }
   char host[NI_MAXHOST];
   getnameinfo(reinterpret_cast<sockaddr *>(&ob->interactive->addr), sizeof(ob->interactive->addr),
-              host, sizeof(host), NULL, 0, NI_NUMERICHOST);
+              host, sizeof(host), nullptr, 0, NI_NUMERICHOST);
   return make_shared_string(host);
 }

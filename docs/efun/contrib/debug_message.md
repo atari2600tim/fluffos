@@ -5,7 +5,7 @@ title: contrib / debug_message
 
 ### NAME
 
-    debug_message() - logs a debug mssage
+    debug_message() - logs a debug message
 
 ### SYNOPSIS
 
@@ -15,3 +15,4 @@ title: contrib / debug_message
 
     Prints  the  given message on the <stderr> file desciptor of the driver
     and appends it to the debug log.
+

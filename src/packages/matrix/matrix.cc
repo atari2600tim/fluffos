@@ -11,8 +11,8 @@
 
 static Matrix identity = {1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.};
 
-static void print_matrix(Matrix, char *);
-static void print_array(Vector *, char *);
+static void print_matrix(Matrix, const char *);
+static void print_array(Vector *, const char *);
 static Vector *normalize_array(Vector *);
 static Vector *cross_product(Vector *, Vector *, Vector *);
 static Vector *points_to_array(Vector *, Vector *, Vector *);
@@ -308,21 +308,21 @@ void f_lookat_rotate2(void) {
 #endif
 
 #ifdef DEBUG
-static void print_matrix(Matrix m, char *label) {
+static void print_matrix(Matrix m, const char *label) {
   int i;
   int j;
 
-  fprintf(stderr, "%s:\n", label);
+  debug_message("%s:\n", label);
   for (i = 0; i < 4; i++) {
     for (j = 0; j < 4; j++) {
-      fprintf(stderr, "%f\t", m[i * 4 + j]);
+      debug_message("%f\t", m[i * 4 + j]);
     }
-    fprintf(stderr, "\n");
+    debug_message("\n");
   }
 }
 
-static void print_array(Vector *v, char *label) {
-  fprintf(stderr, "%s:\t%f\t%f\t%f\n", label, v->x, v->y, v->z);
+static void print_array(Vector *v, const char *label) {
+  debug_message("%s:\t%f\t%f\t%f\n", label, v->x, v->y, v->z);
 }
 #endif
 

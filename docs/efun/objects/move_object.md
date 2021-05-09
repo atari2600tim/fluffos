@@ -9,14 +9,12 @@ title: objects / move_object
 
 ### SYNOPSIS
 
-    void move_object( object item, mixed dest );
+    void move_object( mixed dest );
 
 ### DESCRIPTION
 
-    Move  the  object  'item'  into  the  object  'dest'.   'item'  must be
-    this_object().  move_object may be optionally called with one  argument
-    in  which  case 'item' is implicitly this_object() and the passed argu‐
-    ment is 'dest'.
+    Move the current object into the object `dest'.  dest should either be
+    a filename or an object.
 
 ### SEE ALSO
 

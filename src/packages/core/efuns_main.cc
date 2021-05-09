@@ -10,19 +10,12 @@
 #include "base/package_api.h"
 
 #include <algorithm>
-#ifdef HAVE_CRYPT_H
-#include <crypt.h>
-#endif
 #ifdef HAVE_SYS_STAT_H
 #include <sys/stat.h>
 #endif
-#ifdef HAVE_SYS_RESOURCE_H
-#include <sys/resource.h>
-#endif
-#ifdef HAVE_SYS_RUSAGE_H
-#include <sys/rusage.h>
-#endif
+
 #include <unistd.h>  // for rmdir(), FIXME
+#include "thirdparty/crypt/crypt.h"
 
 #include "packages/core/call_out.h"
 #include "packages/core/dns.h"
@@ -34,6 +27,7 @@
 #include "packages/core/reclaim.h"
 #include "packages/core/custom_crypt.h"
 #include "packages/core/ed.h"
+#include "packages/core/heartbeat.h"
 
 int data_size(object_t *ob);
 void reload_object(object_t *obj);
@@ -158,23 +152,28 @@ void f_bind(void) {
 }
 #endif
 
-#ifdef F_CACHE_STATS
-static void print_cache_stats(outbuffer_t *ob) {
-  outbuf_add(ob, "Apply lookup cache information\n");
-  outbuf_add(ob, "-------------------------------\n");
-  outbuf_addv(ob, "%% cache hits:    %10.2f\n",
-              100 * (static_cast<LPC_FLOAT>(apply_cache_hits) / apply_cache_lookups));
-  outbuf_addv(ob, "total lookup:     %10lu\n", apply_cache_lookups);
-  outbuf_addv(ob, "cache hits:      %10lu\n", apply_cache_hits);
-  outbuf_addv(ob, "cache size (bytes w/o overhead):  %10lu\n",
-              apply_cache_items * sizeof(lookup_entry_s));
+static int print_cache_stats(outbuffer_t *ob, int verbose) {
+  auto size = apply_cache_items * sizeof(lookup_entry_s);
+  if (verbose == 1) {
+    outbuf_add(ob, "Apply lookup cache information\n");
+    outbuf_add(ob, "-------------------------------\n");
+    outbuf_addv(ob, "%% cache hits:    %10.2f\n",
+                100 * (static_cast<LPC_FLOAT>(apply_cache_hits) / apply_cache_lookups));
+    outbuf_addv(ob, "total lookup:     %10lu\n", apply_cache_lookups);
+    outbuf_addv(ob, "cache hits:      %10lu\n", apply_cache_hits);
+    outbuf_addv(ob, "cache size (bytes w/o overhead):  %10lu\n", size);
+  } else if (verbose != -1) {
+    outbuf_addv(ob, "%-20s %8lu %8lu\n", "Apply cache", apply_cache_items, size);
+  }
+  return size;
 }
 
+#ifdef F_CACHE_STATS
 void f_cache_stats(void) {
   outbuffer_t ob;
 
   outbuf_zero(&ob);
-  print_cache_stats(&ob);
+  print_cache_stats(&ob, 1);
   outbuf_push(&ob);
 }
 #endif
@@ -184,7 +183,6 @@ void f_cache_stats(void) {
 void f__call_other(void) {
   svalue_t *arg;
   const char *funcname;
-  int i;
   int num_arg = st_num_arg;
   object_t *ob;
 
@@ -221,16 +219,11 @@ void f__call_other(void) {
   } else {
     ob = find_object(arg[0].u.string);
     if (!ob || !object_visible(ob)) {
-      error("call_other() couldn't find object\n");
+      error("call_other() couldn't find object '%s'.\n", arg[0].u.string);
     }
   }
   /* Send the remaining arguments to the function. */
-  if (CONFIG_INT(__RC_TRACE__)) {
-    if (TRACEP(TRACE_CALL_OTHER)) {
-      do_trace("Call other ", funcname, "\n");
-    }
-  }
-  if (apply(funcname, ob, num_arg - 2, ORIGIN_CALL_OTHER) == 0) { /* Function not found */
+  if (apply(funcname, ob, num_arg - 2, ORIGIN_CALL_OTHER) == nullptr) { /* Function not found */
     pop_2_elems();
     push_undefined();
     return;
@@ -318,12 +311,11 @@ void f_call_stack(void) {
     case 4:
       for (i = 0; i < n; i++) {
         ret->item[i].type = T_STRING;
-        if (1 || ((csp - i)->framekind & FRAME_MASK) == FRAME_FUNCTION ||
+        if (true || ((csp - i)->framekind & FRAME_MASK) == FRAME_FUNCTION ||
             ((csp - i)->framekind & FRAME_MASK) == FRAME_FUNP) {
           const program_t *prog = (i ? (csp - i + 1)->prog : current_prog);
           int index = (csp - i)->fr.table_index;
           char *progc = (i ? (csp - i + 1)->pc : pc);
-          function_t *cfp = &prog->function_table[index];
           ret->item[i].type = T_STRING;
           ret->item[i].subtype = STRING_MALLOC;
           ret->item[i].u.string = string_copy(get_line_number(progc, prog), "call_stack");
@@ -352,12 +344,12 @@ void f_capitalize(void) {
 
 #ifdef F_CHILDREN
 void f_children(void) {
-  auto max_array_size = CONFIG_INT(__MAX_ARRAY_SIZE__ );
+  auto max_array_size = CONFIG_INT(__MAX_ARRAY_SIZE__);
   auto v = ObjectTable::instance().children(sp->u.string);
   auto len = v.size() < max_array_size ? v.size() : max_array_size;
   auto res = allocate_empty_array(len);
 
-  for(auto i = 0;i < v.size() && i < len;++i) {
+  for (auto i = 0; i < v.size() && i < len; ++i) {
     res->item[i].u.ob = v[i];
     res->item[i].type = T_OBJECT;
     add_ref(v[i], "children");
@@ -386,7 +378,8 @@ void f_clear_bit(void) {
 
   auto max_bitfield_bits = CONFIG_INT(__MAX_BITFIELD_BITS__);
   if (sp->u.number > max_bitfield_bits) {
-    error("clear_bit() bit requested : %d > maximum bits: %d\n", sp->u.number, max_bitfield_bits);
+    error("clear_bit() bit requested : %" LPC_INT_FMTSTR_P " > maximum bits: %d\n", sp->u.number,
+          max_bitfield_bits);
   }
   bit = (sp--)->u.number;
   if (bit < 0) {
@@ -433,30 +426,6 @@ void f__new(void) {
   } else {
     *sp = const0;
   }
-}
-#endif
-
-#ifdef F_CTIME
-void f_ctime(void) {
-  const char *cp, *nl;
-  char *p;
-  int l;
-  if (st_num_arg) {
-    cp = time_string(sp->u.number);
-  } else {
-    push_number(0);
-    cp = time_string(get_current_time());
-  }
-  if ((nl = strchr(cp, '\n'))) {
-    l = nl - cp;
-  } else {
-    l = strlen(cp);
-  }
-
-  p = new_string(l, "f_ctime");
-  strncpy(p, cp, l);
-  p[l] = '\0';
-  put_malloced_string(p);
 }
 #endif
 
@@ -510,9 +479,9 @@ void f_deep_inventory(void) {
     if (sp->type == T_FUNCTION) {
       vec = deep_inventory(current_object, 0, sp->u.fp);
     } else if (sp->type == T_ARRAY) {
-      vec = deep_inventory_array(sp->u.arr, 1, 0);
+      vec = deep_inventory_array(sp->u.arr, 1, nullptr);
     } else { /*sp->type==T_OBJECT*/
-      vec = deep_inventory(sp->u.ob, 0, 0);
+      vec = deep_inventory(sp->u.ob, 0, nullptr);
     }
   } else {
     vec = &the_null_array;
@@ -541,17 +510,18 @@ void f_enable_wizard(void) {
 #ifdef F_ERROR
 void f_error(void) {
   int l = SVALUE_STRLEN(sp);
-  char err_buf[2048];
-
   if (l && sp->u.string[l - 1] == '\n') {
     l--;
   }
-  if (l > 2045) {
-    l = 2045;
-  }
+  const auto max_string_length = LARGEST_PRINTABLE_STRING;
+  l = std::min(l, max_string_length - 3);
+
+  // VLA
+  char err_buf[l + 3];
 
   err_buf[0] = '*';
-  strncpy(err_buf + 1, sp->u.string, l);
+  u8_strncpy(reinterpret_cast<uint8_t *>(err_buf + 1),
+             reinterpret_cast<const uint8_t *>(sp->u.string), l);
   err_buf[l + 1] = '\n';
   err_buf[l + 2] = 0;
 
@@ -586,36 +556,6 @@ void f_environment(void) {
   } else {
     push_number(0);
   }
-}
-#endif
-
-#ifdef F_EXEC
-void f_exec(void) {
-  int i;
-
-  i = replace_interactive((sp - 1)->u.ob, sp->u.ob);
-
-  /* They might have been destructed */
-  if (sp->type == T_OBJECT) {
-    free_object(&sp->u.ob, "f_exec:1");
-  }
-  if ((--sp)->type == T_OBJECT) {
-    free_object(&sp->u.ob, "f_exec:2");
-  }
-  put_number(i);
-}
-#endif
-
-#ifdef F_EXPLODE
-void f_explode(void) {
-  array_t *vec;
-
-  int len = SVALUE_STRLEN(sp - 1);
-
-  vec = explode_string((sp - 1)->u.string, len, sp->u.string, SVALUE_STRLEN(sp));
-  free_string_svalue(sp--);
-  free_string_svalue(sp);
-  put_array(vec);
 }
 #endif
 
@@ -770,45 +710,6 @@ void f_get_char(void) {
 }
 #endif
 
-#ifdef F_IMPLODE
-void f_implode(void) {
-  array_t *arr;
-  int flag;
-  svalue_t *args;
-
-  if (st_num_arg == 3) {
-    args = (sp - 2);
-    if (args[1].type == T_STRING) {
-      error(
-          "Third argument to implode() is illegal with implode(array, "
-          "string)\n");
-    }
-    flag = 1;
-  } else {
-    args = (sp - 1);
-    flag = 0;
-  }
-  arr = args->u.arr;
-  check_for_destr(arr);
-
-  if (args[1].type == T_STRING) {
-    /* st_num_arg == 2 here */
-    char *str;
-
-    str = implode_string(arr, sp->u.string, SVALUE_STRLEN(sp));
-    free_string_svalue(sp--);
-    free_array(arr);
-    put_malloced_string(str);
-  } else { /* function */
-    funptr_t *funp = args[1].u.fp;
-
-    /* this pulls the extra arg off the stack if it exists */
-    implode_array(funp, arr, args, flag);
-    pop_stack();
-  }
-}
-#endif
-
 #ifdef F_IN_INPUT
 void f_in_input(void) {
   int i;
@@ -880,7 +781,7 @@ void f_input_to(void) {
     st_num_arg--; /* Don't count the flag as an arg */
     flag = arg[1].u.number;
   }
-  st_num_arg--; /* Don't count the name of the func either. */
+  st_num_arg--; /* Don't count the name of the func eicther. */
   i = input_to(arg, flag, st_num_arg, &arg[1 + tmp]);
   free_svalue(arg, "f_input_to");
   (sp = arg)->type = T_NUMBER;
@@ -892,47 +793,8 @@ void f_input_to(void) {
 void f_interactive(void) {
   int i;
 
-  i = (sp->u.ob->interactive != 0);
+  i = (sp->u.ob->interactive != nullptr);
   free_object(&sp->u.ob, "f_interactive");
-  put_number(i);
-}
-#endif
-
-#ifdef F_HAS_MXP
-void f_has_mxp(void) {
-  int i = 0;
-
-  if (sp->u.ob->interactive) {
-    i = sp->u.ob->interactive->iflags & USING_MXP;
-    i = !!i;  // force 1 or 0
-  }
-  free_object(&sp->u.ob, "f_has_mxp");
-  put_number(i);
-}
-#endif
-
-#ifdef F_HAS_ZMP
-void f_has_zmp(void) {
-  int i = 0;
-
-  if (sp->u.ob->interactive) {
-    i = sp->u.ob->interactive->iflags & USING_ZMP;
-    i = !!i;  // force 1 or 0
-  }
-  free_object(&sp->u.ob, "f_has_zmp");
-  put_number(i);
-}
-#endif
-
-#ifdef F_HAS_GMCP
-void f_has_gmcp() {
-  int i = 0;
-
-  if (sp->u.ob->interactive) {
-    i = sp->u.ob->interactive->iflags & USING_GMCP;
-    i = !!i;  // force 1 or 0
-  }
-  free_object(&sp->u.ob, "f_has_gmcp");
   put_number(i);
 }
 #endif
@@ -1172,7 +1034,7 @@ void f_member_array(void) {
   } else {
     svalue_t *sv;
     svalue_t *find;
-    int flen;
+    int flen = 0;
 
     size = (v = sp->u.arr)->size;
     find = (sp - 1);
@@ -1251,13 +1113,11 @@ void f_member_array(void) {
             break;
           }
           continue;
-#ifndef NO_BUFFER_TYPE
         case T_BUFFER:
           if (find->u.buf == sv->u.buf) {
             break;
           }
           continue;
-#endif
         default:
           if (sv->type == T_OBJECT && (sv->u.ob->flags & O_DESTRUCTED)) {
             assign_svalue(sv, &const0u);
@@ -1364,6 +1224,92 @@ void f_move_object(void) {
 }
 #endif
 
+namespace {
+int calculate_and_maybe_print_memory_info(outbuffer_t *ob, int verbose) {
+  uint64_t tot = 0;
+
+  tot += print_cache_stats(ob, verbose);
+  if (verbose && verbose != -1) outbuf_add(ob, "\n");
+
+  tot += ObjectTable::instance().showStatus(ob, verbose);
+  if (verbose && verbose != -1) outbuf_add(ob, "\n");
+
+  tot += heart_beat_status(ob, verbose);
+  if (verbose && verbose != -1) outbuf_add(ob, "\n");
+
+  tot += print_call_out_usage(ob, verbose);
+  if (verbose && verbose != -1) outbuf_add(ob, "\n");
+
+  if (verbose && verbose != -1) {
+    outbuf_add(ob, "Memory statistics\n");
+    outbuf_add(ob, "------------------------------\n");
+  }
+  auto total_sentence_size = tot_alloc_sentence * sizeof(sentence_t);
+  if (verbose != -1) {
+    outbuf_addv(ob, "%-20s %8" PRIu64 " %8" PRIu64 "\n", "Sentences", tot_alloc_sentence,
+                total_sentence_size);
+  }
+  tot += total_sentence_size;
+
+  if (verbose != -1) {
+#ifndef DEBUG
+    outbuf_addv(ob, "%-20s %8" PRIu64 " %8" PRIu64 "\n", "Objects", tot_alloc_object,
+                tot_alloc_object_size);
+#else
+    outbuf_addv(ob, "%-20s %8" PRIu64 " %8" PRIu64 " (%" PRIu64 " dangling)\n",
+                "Objects:", tot_alloc_object, tot_alloc_object_size, tot_dangling_object);
+#endif
+  }
+  tot += tot_alloc_object_size;
+
+  auto total_users = (uint64_t)users_num(true);
+  auto total_users_size = total_users * sizeof(interactive_t);
+  if (verbose != -1) {
+    outbuf_addv(ob, "%-20s %8" PRIu64 " %8" PRIu64 "\n", "Interactives", total_users,
+                total_users_size);
+  }
+  tot += total_users_size;
+
+  if (verbose != -1) {
+    outbuf_addv(ob, "%-20s %8" PRIu64 " %8" PRIu64 "\n", "Prog blocks", total_num_prog_blocks,
+                total_prog_block_size);
+  }
+  tot += total_prog_block_size;
+
+  if (verbose != -1) {
+    outbuf_addv(ob, "%-20s %8" PRIu64 " %8" PRIu64 "\n", "Arrays", num_arrays, total_array_size);
+  }
+  tot += total_array_size;
+
+  if (verbose != -1) {
+    outbuf_addv(ob, "%-20s %8" PRIu64 " %8" PRIu64 "\n", "Classes", num_classes, total_class_size);
+  }
+  tot += total_class_size;
+
+  auto total_mapping_free_nodes = free_node_count();
+  auto total_mapping_free_nodes_size = total_mapping_free_nodes * sizeof(mapping_node_t);
+  auto total_mapping_nodes_size = total_mapping_nodes * sizeof(mapping_node_t);
+  if (verbose != -1) {
+    outbuf_addv(ob,
+                "%-20s %8" PRIu64 " %8" PRIu64 " (nodes %" PRIu64 ", size %" PRIu64
+                ", free %" PRIu64 ", size %" PRIu64 ")\n",
+                "Mappings", num_mappings, total_mapping_size + total_mapping_free_nodes_size,
+                total_mapping_nodes, total_mapping_nodes_size, total_mapping_free_nodes,
+                total_mapping_free_nodes_size);
+  }
+  tot += total_mapping_size + total_mapping_free_nodes_size;
+  if (verbose && verbose != -1) outbuf_add(ob, "\n");
+
+  tot += heart_beat_status(ob, verbose);
+  if (verbose && verbose != -1) outbuf_add(ob, "\n");
+
+  tot += add_string_status(ob, verbose);
+  if (verbose && verbose != -1) outbuf_add(ob, "\n");
+
+  return tot;
+}
+}  // namespace
+
 #ifdef F_MUD_STATUS
 void f_mud_status(void) {
   uint64_t tot = 0;
@@ -1375,61 +1321,37 @@ void f_mud_status(void) {
 
   if (verbose) {
     char dir_buf[1024];
-    outbuf_addv(&ob, "current working directory: %s\n\n", get_current_dir(dir_buf, 1024));
+    outbuf_addv(&ob, "current working directory: %s\n", get_current_dir(dir_buf, 1024));
+    outbuf_add(&ob, "\n");
+
     outbuf_add(&ob, "add_message statistics\n");
     outbuf_add(&ob, "------------------------------\n");
-    outbuf_addv(&ob, "Calls to add_message: %8" PRIu64 "   Packets: %8" PRIu64
-                     "   Average packet size: %.2lf\n\n",
-                add_message_calls, inet_packets, static_cast<double>(inet_volume) / inet_packets);
+    outbuf_addv(&ob,
+                "Calls to add_message: %8" PRIu64 "   Packets: %8" PRIu64
+                "   Average packet size: %.2lf bytes\n\n",
+                add_message_calls, inet_packets,
+                inet_volume && inet_packets ? static_cast<double>(inet_volume) / inet_packets : 0);
+
+    outbuf_add(&ob, "\n");
 
     stat_living_objects(&ob);
-
-#ifdef F_CACHE_STATS
-    print_cache_stats(&ob);
     outbuf_add(&ob, "\n");
-#endif
-    tot = ObjectTable::instance().showStatus(&ob, verbose);
-    outbuf_add(&ob, "\n");
-    tot += heart_beat_status(&ob, verbose);
-    outbuf_add(&ob, "\n");
-    tot += add_string_status(&ob, verbose);
-    outbuf_add(&ob, "\n");
-    tot += print_call_out_usage(&ob, verbose);
-  } else {
-    /* !verbose */
-    outbuf_addv(&ob, "Sentences:\t\t\t%8d %8d\n", tot_alloc_sentence,
-                tot_alloc_sentence * sizeof(sentence_t));
-#ifndef DEBUG
-    outbuf_addv(&ob, "Objects:\t\t\t%8" PRIu64 " %8" PRIu64 "\n", tot_alloc_object,
-                tot_alloc_object_size);
-#else
-    outbuf_addv(&ob, "Objects:\t\t\t%8" PRIu64 " %8" PRIu64 " (%8" PRIu64 " dangling)\n",
-                tot_alloc_object, tot_alloc_object_size, tot_dangling_object);
-#endif
-    outbuf_addv(&ob, "Prog blocks:\t\t\t%8" PRIu64 " %8" PRIu64 "\n", total_num_prog_blocks,
-                total_prog_block_size);
-    outbuf_addv(&ob, "Arrays:\t\t\t\t%8" PRIu64 " %8" PRIu64 "\n", num_arrays, total_array_size);
-    outbuf_addv(&ob, "Classes:\t\t\t%8" PRIu64 " %8" PRIu64 "\n", num_classes, total_class_size);
-
-    outbuf_addv(&ob, "Mappings:\t\t\t%8" PRIu64 " %8" PRIu64 "\n", num_mappings,
-                total_mapping_size);
-    outbuf_addv(&ob, "Mappings(nodes):\t\t%8" PRIu64 "\n", total_mapping_nodes);
-
-    outbuf_addv(&ob, "Interactives:\t\t\t%8d %8" PRIu64 "\n", users_num(true),
-                (uint64_t)(users_num(true)) * sizeof(interactive_t));
-
-    tot = ObjectTable::instance().showStatus(&ob, verbose) + heart_beat_status(&ob, verbose) +
-          add_string_status(&ob, verbose) + print_call_out_usage(&ob, verbose);
   }
 
-  tot += total_prog_block_size + total_array_size + total_class_size + total_mapping_size +
-         tot_alloc_sentence * sizeof(sentence_t) + tot_alloc_object_size +
-         users_num(true) * sizeof(interactive_t);
+  tot = calculate_and_maybe_print_memory_info(&ob, verbose);
+  if (verbose) outbuf_add(&ob, "\n");
 
-  if (!verbose) {
-    outbuf_add(&ob, "\t\t\t\t\t --------\n");
-    outbuf_addv(&ob, "Total:\t\t\t\t\t %8d\n", tot);
+  if (verbose) {
+    outbuf_add(&ob, "Summary\n");
+    outbuf_add(&ob, "------------------------------\n");
   }
+  outbuf_addv(&ob, "Total accounted: %8" PRIu64 "\n", tot);
+
+  struct rusage current;
+  if (!getrusage(RUSAGE_SELF, &current)) {
+    outbuf_addv(&ob, "Max RSS: %8" PRIu64 "\n", current.ru_maxrss * 1024);
+  }
+
   outbuf_push(&ob);
 }
 #endif
@@ -1473,7 +1395,7 @@ void f_present(void) {
       try_reset(arg[1].u.ob);
     }
   }
-  ob = object_present(arg, num_arg == 1 ? 0 : arg[1].u.ob);
+  ob = object_present(arg, num_arg == 1 ? nullptr : arg[1].u.ob);
   pop_n_elems(num_arg);
   if (ob && object_visible(ob)) {
     push_object(ob);
@@ -1494,7 +1416,7 @@ void f_previous_object(void) {
       sp->u.number = 0;
       return;
     }
-    ob = 0;
+    ob = nullptr;
     p = csp;
     do {
       if ((p->framekind & FRAME_OB_CHANGE) && !(--i)) {
@@ -1634,7 +1556,7 @@ void f_query_idle(void) {
 void f_query_ip_name(void) {
   const char *tmp;
 
-  tmp = query_ip_name(st_num_arg ? sp->u.ob : 0);
+  tmp = query_ip_name(st_num_arg ? sp->u.ob : nullptr);
   if (st_num_arg) {
     free_object(&(sp--)->u.ob, "f_query_ip_name");
   }
@@ -1651,7 +1573,7 @@ void f_query_ip_name(void) {
 void f_query_ip_number(void) {
   const char *tmp;
 
-  tmp = query_ip_number(st_num_arg ? sp->u.ob : 0);
+  tmp = query_ip_number(st_num_arg ? sp->u.ob : nullptr);
   if (st_num_arg) {
     free_object(&(sp--)->u.ob, "f_query_ip_number");
   }
@@ -1724,6 +1646,16 @@ void f_random(void) {
 }
 #endif
 
+#ifdef F_SECURE_RANDOM
+void f_secure_random(void) {
+  if (sp->u.number <= 0) {
+    sp->u.number = 0;
+    return;
+  }
+  sp->u.number = secure_random_number(sp->u.number);
+}
+#endif
+
 #ifdef F_READ_BYTES
 void f_read_bytes(void) {
   char *str;
@@ -1739,10 +1671,12 @@ void f_read_bytes(void) {
   }
   str = read_bytes(arg[0].u.string, start, len, &rlen);
   pop_n_elems(num_arg);
-  if (str == 0) {
+  if (str == nullptr) {
     push_number(0);
   } else {
-    push_malloced_string(str);
+    auto res = u8_sanitize(str);
+    copy_and_push_string(res.c_str());
+    FREE_MSTR(str);
   }
 }
 #endif
@@ -1767,7 +1701,7 @@ void f_read_buffer(void) {
     str = read_buffer(arg[0].u.buf, start, len, &rlen);
   }
   pop_n_elems(num_arg);
-  if (str == 0) {
+  if (str == nullptr) {
     push_number(0);
   } else if (from_file) { /* changed */
     buffer_t *buf;
@@ -1808,7 +1742,9 @@ void f_read_file(void) {
   if (!str) {
     push_svalue(&const0);
   } else {
-    push_malloced_string(str);
+    auto res = u8_sanitize(str);
+    copy_and_push_string(res.c_str());
+    FREE_MSTR(str);
   }
 }
 #endif
@@ -1826,16 +1762,13 @@ void f_receive(void) {
       add_message(current_object, sp->u.string, len);
     }
     free_string_svalue(sp--);
-  }
-#ifndef NO_BUFFER_TYPE
-  else {
+  } else {
     if (current_object->interactive) {
       add_message(current_object, reinterpret_cast<char *>(sp->u.buf->item), sp->u.buf->size);
     }
 
     free_buffer((sp--)->u.buf);
   }
-#endif
 }
 #endif
 
@@ -2277,7 +2210,7 @@ void f_say(void) {
 #endif
                          1,
 #ifdef PACKAGE_MUDLIB_STATS
-                         {(mudlib_stats_t *)NULL, (mudlib_stats_t *)NULL}
+                         {(mudlib_stats_t *)nullptr, (mudlib_stats_t *)nullptr}
 #endif
   };
 
@@ -2304,9 +2237,6 @@ void f_say(void) {
  object and a set_eval_limit() simul_efun to restrict access.
  */
 void f_set_eval_limit(void) {
-  if (sp->u.number < 0) {
-    sp->u.number = 0;
-  }
   switch (sp->u.number) {
     case 0:
       sp->u.number = max_eval_cost;
@@ -2319,6 +2249,9 @@ void f_set_eval_limit(void) {
       sp->u.number = max_eval_cost;
       break;
     default:
+      if (sp->u.number < -1) {
+        error("Invalid number.");
+      }
       max_eval_cost = sp->u.number;
       break;
   }
@@ -2332,7 +2265,8 @@ void f_set_bit(void) {
 
   auto max_bitfield_bits = CONFIG_INT(__MAX_BITFIELD_BITS__);
   if (sp->u.number > max_bitfield_bits) {
-    error("set_bit() bit requested: %d > maximum bits: %d\n", sp->u.number, max_bitfield_bits);
+    error("set_bit() bit requested: %" LPC_INT_FMTSTR_P " > maximum bits: %d\n", sp->u.number,
+          max_bitfield_bits);
   }
   bit = (sp--)->u.number;
   if (bit < 0) {
@@ -2494,7 +2428,7 @@ void f_shutdown(void) {
 
 #ifdef F_SIZEOF
 void f_sizeof(void) {
-  int i;
+  size_t i;
 
   switch (sp->type) {
     case T_CLASS:
@@ -2509,16 +2443,16 @@ void f_sizeof(void) {
       i = sp->u.map->count;
       free_mapping(sp->u.map);
       break;
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER:
       i = sp->u.buf->size;
       free_buffer(sp->u.buf);
       break;
-#endif
-    case T_STRING:
-      i = SVALUE_STRLEN(sp);
+    case T_STRING: {
+      auto success = u8_egc_count(sp->u.string, &i);
+      DEBUG_CHECK(!success, "Invalid UTF8 string!");
       free_string_svalue(sp);
       break;
+    }
     default:
       i = 0;
       free_svalue(sp, "f_sizeof");
@@ -2534,7 +2468,7 @@ void f_snoop(void) {
    * object.
    */
   if (st_num_arg == 1) {
-    if (!new_set_snoop(sp->u.ob, 0) || (sp->u.ob->flags & O_DESTRUCTED)) {
+    if (!new_set_snoop(sp->u.ob, nullptr) || (sp->u.ob->flags & O_DESTRUCTED)) {
       free_object(&sp->u.ob, "f_snoop:1");
       *sp = const0;
     }
@@ -2586,7 +2520,7 @@ void f_stat(void) {
   }
   if (stat(path, &buf) != -1) {
     if (buf.st_mode & S_IFREG) { /* if a regular file */
-      v = allocate_empty_array(3);
+      v = allocate_empty_array(4);
       v->item[0].type = T_NUMBER;
       v->item[0].subtype = 0;
       v->item[0].u.number = buf.st_size;
@@ -2597,13 +2531,18 @@ void f_stat(void) {
       v->item[2].subtype = 0;
       ob = find_object2(path);
       if (ob && !object_visible(ob)) {
-        ob = 0;
+        ob = nullptr;
       }
       if (ob) {
         v->item[2].u.number = ob->load_time;
       } else {
         v->item[2].u.number = 0;
       }
+
+      v->item[3].type = T_NUMBER;
+      v->item[3].subtype = 0;
+      v->item[3].u.number = buf.st_ctime;
+
       free_string_svalue(sp);
       put_array(v);
       return;
@@ -2629,74 +2568,38 @@ void f_stat(void) {
  */
 
 void f_strsrch(void) {
-  const char *big, *little, *pos;
-  static char buf[2]; /* should be initialized to 0 */
-  int i, blen, llen;
+  auto arg1 = sp - 2;
+  auto arg2 = sp - 1;
+  auto arg3 = sp;
 
-  sp--;
-  big = (sp - 1)->u.string;
-  blen = SVALUE_STRLEN(sp - 1);
-  if (sp->type == T_NUMBER) {
-    little = buf;
-    if ((buf[0] = static_cast<char>(sp->u.number))) {
-      llen = 1;
-    } else {
-      llen = 0;
+  size_t src_len = SVALUE_STRLEN(arg1);
+
+  uint8_t buf[U8_MAX_LENGTH + 1] = {0};
+  const char *find = nullptr;
+  size_t find_len = 0;
+  if (arg2->type == T_NUMBER) {
+    UBool isError = false;
+    int offset = 0;
+    U8_APPEND(buf, offset, sizeof(buf), arg2->u.number, isError);
+    if (isError) {
+      error("Invalid codepoint to search.");
     }
+    buf[offset] = '\0';
+    find = (const char *)buf;
+    find_len = offset;
   } else {
-    little = sp->u.string;
-    llen = SVALUE_STRLEN(sp);
+    find = arg2->u.string;
+    find_len = SVALUE_STRLEN(arg2);
   }
 
-  if (!llen || blen < llen) {
-    pos = NULL;
-
-    /* start at left */
-  } else if (!((sp + 1)->u.number)) {
-    if (!little[1]) { /* 1 char srch pattern */
-      pos = strchr(big, little[0]);
-    } else {
-      pos = const_cast<char *>(strstr(big, little));
-    }
-    /* start at right */
-  } else {            /* XXX: maybe test for -1 */
-    if (!little[1]) { /* 1 char srch pattern */
-      pos = strrchr(big, little[0]);
-    } else {
-      char c = *little;
-
-      pos = big + blen; /* find end */
-      pos -= llen;      /* find rightmost pos it _can_ be */
-      do {
-        do {
-          if (*pos == c) {
-            break;
-          }
-        } while (--pos >= big);
-        if (pos < big) {
-          pos = NULL;
-          break;
-        }
-        for (i = 1; little[i] && (pos[i] == little[i]); i++) {
-          ;
-        } /* scan all chars */
-        if (!little[i]) {
-          break;
-        }
-      } while (--pos >= big);
-    }
+  LPC_INT ret = -1;
+  // only search if there is a chance.
+  if (find_len <= src_len) {
+    ret = u8_egc_find_as_index(arg1->u.string, src_len, find, find_len, arg3->u.number != 0);
   }
 
-  if (!pos) {
-    i = -1;
-  } else {
-    i = pos - big;
-  }
-  if (sp->type == T_STRING) {
-    free_string_svalue(sp);
-  }
-  free_string_svalue(--sp);
-  put_number(i);
+  pop_3_elems();
+  push_number(ret);
 } /* strsrch */
 #endif
 
@@ -2752,7 +2655,7 @@ void f_tell_room(void) {
 #endif
                          1,
 #ifdef PACKAGE_MUDLIB_STATS
-                         {(mudlib_stats_t *)NULL, (mudlib_stats_t *)NULL}
+                         {(mudlib_stats_t *)nullptr, (mudlib_stats_t *)nullptr}
 #endif
   };
 
@@ -2840,7 +2743,7 @@ void f_next_bit(void) {
     value = *sp->u.string - ' ';
   }
 
-  while (1) {
+  while (true) {
     if (value) {
       if (value & 0x07) {
         if (value & 0x01) {
@@ -2918,21 +2821,18 @@ void f_throw(void) {
 }
 #endif
 
-#ifdef F_TIME
-void f_time(void) { push_number(get_current_time()); }
-#endif
-
 #ifdef F__TO_FLOAT
 void f__to_float(void) {
   LPC_FLOAT temp = 0;
 
   switch (sp->type) {
     case T_NUMBER:
+      temp = sp->u.number;
       sp->type = T_REAL;
-      sp->u.real = static_cast<LPC_FLOAT>(sp->u.number);
+      sp->u.real = temp;
       break;
     case T_STRING:
-      temp = strtod(sp->u.string, NULL);
+      temp = strtod(sp->u.string, nullptr);
       free_string_svalue(sp);
       sp->type = T_REAL;
       sp->u.real = temp;
@@ -2942,13 +2842,14 @@ void f__to_float(void) {
 
 #ifdef F__TO_INT
 void f__to_int(void) {
+  LPC_INT temp = 0;
   switch (sp->type) {
     case T_REAL:
+      temp = sp->u.real;
       sp->type = T_NUMBER;
-      sp->u.number = static_cast<LPC_INT>(sp->u.real);
+      sp->u.number = temp;
       break;
     case T_STRING: {
-      LPC_INT temp;
       char *p;
 
       temp = strtoll(sp->u.string, &p, 10);
@@ -2982,7 +2883,6 @@ void f__to_int(void) {
       sp->type = T_NUMBER;
       break;
     }
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER:
       if (sp->u.buf->size < sizeof(int)) {
         free_buffer(sp->u.buf);
@@ -2995,7 +2895,6 @@ void f__to_int(void) {
         free_buffer(sp->u.buf);
         put_number(hostint);
       }
-#endif
   }
 }
 #endif
@@ -3114,13 +3013,11 @@ void f_write_bytes(void) {
       break;
     }
 
-#ifndef NO_BUFFER_TYPE
     case T_BUFFER: {
       i = write_bytes((sp - 2)->u.string, (sp - 1)->u.number,
                       reinterpret_cast<char *>(sp->u.buf->item), sp->u.buf->size);
       break;
     }
-#endif
 
     case T_STRING: {
       i = write_bytes((sp - 2)->u.string, (sp - 1)->u.number, sp->u.string, SVALUE_STRLEN(sp));
@@ -3128,11 +3025,7 @@ void f_write_bytes(void) {
     }
 
     default: {
-#ifdef NO_BUFFER_TYPE
-      bad_argument(sp, T_STRING | T_NUMBER, 3, F_WRITE_BYTES);
-#else
       bad_argument(sp, T_BUFFER | T_STRING | T_NUMBER, 3, F_WRITE_BYTES);
-#endif
     }
   }
   free_svalue(sp--, "f_write_bytes");
@@ -3173,7 +3066,9 @@ void f_write_buffer(void) {
       break;
     }
 
-    default: { bad_argument(sp, T_BUFFER | T_STRING | T_NUMBER, 3, F_WRITE_BUFFER); }
+    default: {
+      bad_argument(sp, T_BUFFER | T_STRING | T_NUMBER, 3, F_WRITE_BUFFER);
+    }
   }
   free_svalue(sp--, "f_write_buffer");
   free_svalue(--sp, "f_write_buffer");
@@ -3204,7 +3099,12 @@ void f_dump_file_descriptors(void) {
 #endif
 
 #ifdef F_RECLAIM_OBJECTS
-void f_reclaim_objects(void) { push_number(reclaim_objects(false)); }
+void f_reclaim_objects(void) {
+  auto res = reclaim_objects(false);
+  add_gametick_event(std::chrono::seconds(0),
+                     tick_event::callback_type([] { remove_destructed_objects(); }));
+  push_number(res);
+}
 #endif
 
 #ifdef F_MEMORY_INFO
@@ -3213,12 +3113,7 @@ void f_memory_info(void) {
   object_t *ob;
 
   if (st_num_arg == 0) {
-    LPC_INT tot;
-
-    tot = total_prog_block_size + total_array_size + total_class_size + total_mapping_size +
-          tot_alloc_object_size + tot_alloc_sentence * sizeof(sentence_t) +
-          users_num(1) * sizeof(interactive_t) + ObjectTable::instance().showStatus(0, -1) +
-          heart_beat_status(0, -1) + add_string_status(0, -1) + print_call_out_usage(0, -1);
+    LPC_INT tot = calculate_and_maybe_print_memory_info(nullptr, -1);
     push_number(tot);
     return;
   }
@@ -3341,12 +3236,12 @@ void f_next_inventory(void) {
 
 #ifdef F_DEFER
 void f_defer() {
-  struct defer_list *newlist = reinterpret_cast<struct defer_list *>(
+  auto *newlist = reinterpret_cast<struct defer_list *>(
       DMALLOC(sizeof(struct defer_list), TAG_TEMPORARY, "defer: new item"));
 
   if (CONFIG_INT(__RC_REVERSE_DEFER__)) {
     // In reverse mode, newlist always will be the last data.
-    newlist->next = NULL;
+    newlist->next = nullptr;
   } else {
     // In normal mode, newlist always will be the first data.
     newlist->next = csp->defers;
@@ -3363,7 +3258,7 @@ void f_defer() {
   // In reverse mode, if list is not null, then add new item to the end.
   if (CONFIG_INT(__RC_REVERSE_DEFER__)) {
     // If list is null, then init it with new item.
-    if (csp->defers == NULL) {
+    if (csp->defers == nullptr) {
       csp->defers = newlist;
     } else {
       // Search last defer.
@@ -3380,17 +3275,67 @@ void f_defer() {
 #endif
 
 #ifdef F_CRYPT
-#define SALT_LEN 8
+void f_crypt(void) {
+  const int SHA512_PREFIX_LEN = 3;
+  const int SHA512_SALT_LEN = 16;
+  char salt[SHA512_PREFIX_LEN + SHA512_SALT_LEN + 1];
+  const char *saltp = nullptr;
+  const char *choice = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./";
 
-#ifdef CUSTOM_CRYPT
-#define CRYPT(x, y) custom_crypt(x, y, 0)
-#define OLDCRYPT(x, y) crypt(x, y)
-#else
-#define CRYPT(x, y) crypt(x, y)
-#define OLDCRYPT(x, y) crypt(x, y)
+  if (sp->type == T_STRING) {
+    // Support $1$, $2a$ (a,x,y), $5$, $6$
+    if (sp->u.string[0] == '$') {
+      // $2?$
+      if (SVALUE_STRLEN(sp) >= 4 && sp->u.string[1] == '2' &&
+          (sp->u.string[2] == 'a' || sp->u.string[2] == 'x' || sp->u.string[2] == 'y') &&
+          sp->u.string[3] == '$') {
+        saltp = sp->u.string;
+      } else {
+        if (SVALUE_STRLEN(sp) >= 3 &&
+            (sp->u.string[1] == '1' || sp->u.string[1] == '5' || sp->u.string[1] == '6') &&
+            sp->u.string[2] == '$') {
+          saltp = sp->u.string;
+        }
+      }
+    } else if (SVALUE_STRLEN(sp) >= 2) {
+      // Compat: Old f_crypt only use first two character as key.
+      debug_message(
+          "old crypt() password detected, It is only using first 2 character as key and ignore "
+          "password beyond 8 characters, please upgrade to SHA512 using crypt(password) "
+          "immediately.\n");
+      salt[0] = sp->u.string[0];
+      salt[1] = sp->u.string[1];
+      salt[2] = '\0';
+      saltp = salt;
+    }
+  }
+
+  if (saltp == nullptr) {
+    salt[0] = '$';
+    salt[1] = '6';
+    salt[2] = '$';
+    for (auto i = 0; i < SHA512_SALT_LEN; i++) {
+      salt[3 + i] = choice[random_number(strlen(choice))];
+    }
+    salt[sizeof(salt) - 1] = '\0';
+    saltp = salt;
+  }
+  auto key = (sp - 1)->u.string;
+  auto result = __crypt(key, saltp);
+  if (result == nullptr || (result && result[0] == '*')) {
+    error("Error in crypt(), check your salt");
+    return;
+  }
+  result = string_copy(result, "f_crypt");
+  pop_2_elems();
+  push_malloced_string(result);
+}
 #endif
 
-void f_crypt(void) {
+#ifdef F_OLDCRYPT
+void f_oldcrypt(void) {
+  const int SALT_LEN = 8;
+
   const char *res, *p;
   char salt[SALT_LEN + 1];
   const char *choice = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ./";
@@ -3407,104 +3352,29 @@ void f_crypt(void) {
     salt[SALT_LEN] = 0;
     p = salt;
   }
-
-  res = string_copy(CRYPT((sp - 1)->u.string, p), "f_crypt");
-  pop_stack();
-  free_string_svalue(sp);
-  sp->subtype = STRING_MALLOC;
-  sp->u.string = res;
-}
-#endif
-
-#ifdef F_OLDCRYPT
-void f_oldcrypt(void) {
-  char *res, salt[3];
-  const char *choice = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ./";
-
-  if (sp->type == T_STRING && SVALUE_STRLEN(sp) >= 2) {
-    salt[0] = sp->u.string[0];
-    salt[1] = sp->u.string[1];
-    free_string_svalue(sp--);
-  } else {
-    salt[0] = choice[random_number(strlen(choice))];
-    salt[1] = choice[random_number(strlen(choice))];
-    pop_stack();
-  }
-  salt[2] = 0;
-  res = string_copy(OLDCRYPT(sp->u.string, salt), "f_crypt");
-  free_string_svalue(sp);
-  sp->subtype = STRING_MALLOC;
-  sp->u.string = res;
-}
-#endif
-
-#ifdef F_LOCALTIME
-/* FIXME: most of the #ifdefs here should be based on configure checks
-   instead.  Same for rusage() */
-void f_localtime(void) {
-  struct tm *tm;
-  array_t *vec;
-  time_t lt;
-
-  lt = sp->u.number;
-  tm = localtime(&lt);
-
-  pop_stack();
-
-  if (!tm) {
-    push_svalue(&const0u);
-    return;
-  }
-
-  vec = allocate_empty_array(11);
-
-  vec->item[LT_SEC].type = T_NUMBER;
-  vec->item[LT_SEC].u.number = tm->tm_sec;
-  vec->item[LT_MIN].type = T_NUMBER;
-  vec->item[LT_MIN].u.number = tm->tm_min;
-  vec->item[LT_HOUR].type = T_NUMBER;
-  vec->item[LT_HOUR].u.number = tm->tm_hour;
-  vec->item[LT_MDAY].type = T_NUMBER;
-  vec->item[LT_MDAY].u.number = tm->tm_mday;
-  vec->item[LT_MON].type = T_NUMBER;
-  vec->item[LT_MON].u.number = tm->tm_mon;
-  vec->item[LT_YEAR].type = T_NUMBER;
-  vec->item[LT_YEAR].u.number = tm->tm_year + 1900;
-  vec->item[LT_WDAY].type = T_NUMBER;
-  vec->item[LT_WDAY].u.number = tm->tm_wday;
-  vec->item[LT_YDAY].type = T_NUMBER;
-  vec->item[LT_YDAY].u.number = tm->tm_yday;
-  vec->item[LT_GMTOFF].type = T_NUMBER;
-  vec->item[LT_ZONE].type = T_STRING;
-  vec->item[LT_ZONE].subtype = STRING_MALLOC;
-  vec->item[LT_ISDST].type = T_NUMBER;
-  vec->item[LT_ISDST].u.number = tm->tm_isdst;
-#ifdef __FreeBSD__
-  vec->item[LT_GMTOFF].u.number = tm->tm_gmtoff;
-#else
-  vec->item[LT_GMTOFF].u.number = timezone;
-#endif
-  if (!tm->tm_isdst) {
-    vec->item[LT_ZONE].u.string = string_copy(tzname[0], "f_localtime");
-  } else {
-    vec->item[LT_ZONE].u.string = string_copy(tzname[1], "f_localtime");
-  }
-  push_refed_array(vec);
+  debug_message(
+      "oldcrypt() is deprecated! it is using MD5 and unsafe, please upgrade your code to use "
+      "crypt(password).\n");
+  res = string_copy(custom_crypt((sp - 1)->u.string, p, nullptr), "f_oldcrypt");
+  pop_2_elems();
+  push_malloced_string(res);
 }
 #endif
 
 #ifdef F_RUSAGE
 void f_rusage(void) {
-  struct rusage rus;
   mapping_t *m;
-  long usertime, stime, maxrss;
+  struct rusage rus = {};
 
   if (getrusage(RUSAGE_SELF, &rus) < 0) {
     m = allocate_mapping(0);
   } else {
+    uint64_t usertime, stime, maxrss;
+
     usertime = rus.ru_utime.tv_sec * 1000 + rus.ru_utime.tv_usec / 1000;
     stime = rus.ru_stime.tv_sec * 1000 + rus.ru_stime.tv_usec / 1000;
     maxrss = rus.ru_maxrss;
+
     m = allocate_mapping(16);
     add_mapping_pair(m, "utime", usertime);
     add_mapping_pair(m, "stime", stime);
@@ -3524,5 +3394,14 @@ void f_rusage(void) {
     add_mapping_pair(m, "nivcsw", rus.ru_nivcsw);
   }
   push_refed_mapping(m);
+}
+#endif
+
+#ifdef F_STRWIDTH
+void f_strwidth() {
+  auto width = u8_width(sp->u.string, -1);
+
+  pop_stack();
+  push_number(width);
 }
 #endif
