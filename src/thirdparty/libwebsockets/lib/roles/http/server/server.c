@@ -24,6 +24,10 @@
 
 #include "private-lib-core.h"
 
+#ifndef MIN
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#endif
+
 const char * const method_names[] = {
 	"GET", "POST",
 #if defined(LWS_WITH_HTTP_UNCOMMON_HEADERS)
@@ -2926,8 +2930,16 @@ int lws_serve_http_file_fragment(struct lws *wsi)
 		}
 #endif
 
-		poss = context->pt_serv_buf_size - (unsigned int)n -
-				LWS_H2_FRAME_HEADER_LENGTH;
+		poss = context->pt_serv_buf_size;
+
+#ifdef LWS_ROLE_H2
+    struct lws* nwsi = lws_get_network_wsi(wsi);
+    if (nwsi && nwsi->h2.h2n) {
+      poss = MIN(poss, nwsi->h2.h2n->peer_set.s[H2SET_MAX_FRAME_SIZE]);
+    }
+#endif
+
+    poss = poss - (unsigned int)n - LWS_H2_FRAME_HEADER_LENGTH;
 
 		if (wsi->http.tx_content_length)
 			if (poss > wsi->http.tx_content_remain)

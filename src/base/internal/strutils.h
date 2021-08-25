@@ -1,19 +1,19 @@
 #ifndef STRUTILS_H
 #define STRUTILS_H
 
+#include <unicode/utf8.h>
+#include <unicode/uchar.h>
+#include <unicode/brkiter.h>
+#include <unicode/unistr.h>
+#include <unicode/ucnv.h>
+
 #include <algorithm>
 #include <functional>
 #include <cctype>
 #include <locale>
 #include <string>
-#include <unicode/utf8.h>
-#include <unicode/uchar.h>
-#include <unicode/brkiter.h>
-#include <unicode/unistr.h>
 
 #include "base/internal/EGCIterator.h"
-
-namespace {
 
 // --------------------------------------------------------------------------
 /// @brief removes given characters from beginning of string
@@ -104,7 +104,6 @@ inline void ReplaceStringInPlace(std::string &subject, const std::string &search
     pos += replace.length();
   }
 }
-}  // namespace
 
 // a smarter subclass that remembers current location and attempt to do
 // relative movement to improve speed. but offer no access to underlying break iterator.
@@ -185,9 +184,9 @@ class EGCSmartIterator : public EGCIterator {
 // Check string s is valid utf8
 bool u8_validate(const char *);
 bool u8_validate(const uint8_t *, size_t);
-UChar32 u8_egc_index_as_single_codepoint(const char *str, int32_t index);
+UChar32 u8_egc_index_as_single_codepoint(const char *, int32_t, int32_t);
 void u8_copy_and_replace_codepoint_at(const char *src, char *dst, int32_t index, UChar32 c);
-int32_t u8_offset_to_egc_index(const char *src, int32_t offset);
+int32_t u8_offset_to_egc_index(EGCIterator &iter, int32_t offset);
 int32_t u8_strncpy(uint8_t *, const uint8_t *, const int32_t);
 size_t u8_truncate(const uint8_t *, size_t);
 // Return display width for string piece, len could be -1 for NULL terminated string.
@@ -195,9 +194,13 @@ size_t u8_width(const char *src, int len);
 void u8_truncate_below_width(const char *src, size_t len, size_t max_width, bool break_for_line,
                              bool always_break_before_newline, size_t *out_len, size_t *out_width);
 std::string u8_sanitize(std::string_view src);
-int u8_egc_find_as_offset(const char *haystack, size_t haystack_len, const char *needle,
-                          size_t needle_len, bool reverse);
+int32_t u8_egc_find_as_offset(EGCIterator &iter,
+                              const char *haystack,
+                              size_t haystack_len,
+                              const char *needle,
+                              size_t needle_len,
+                              bool reverse);
 
 std::vector<std::string_view> u8_egc_split(const char *src);
-
+std::string u8_convert_encoding(UConverter *trans, const char *data, int len);
 #endif  // STRUTILS_H
