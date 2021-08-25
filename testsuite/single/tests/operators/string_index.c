@@ -35,9 +35,14 @@ void do_tests() {
   ASSERT_EQ(oob, catch(charAt("", -999)));
 
   // INDEX_LVALUE
+  tmp[0] = '#';
+  ASSERT_EQ("#bcdefg", tmp);
   tmp[3] = '#';
-  ASSERT_EQ("abc#efg", tmp);
+  ASSERT_EQ("#bc#efg", tmp);
   tmp[3] = 'd';
+  ASSERT_EQ("#bcdefg", tmp);
+  tmp[0] = 'a';
+  ASSERT_EQ("abcdefg", tmp);
   ASSERT_EQ(oob_l, catch(tmp[strlen(tmp)] = 'a'));
   ASSERT_EQ(oob_l, catch(tmp[999] = 'a'));
   ASSERT_EQ(oob_l, catch(tmp[-1] = 'a'));
@@ -81,6 +86,10 @@ void do_tests() {
   ASSERT_EQ("abc", tmp[0..2]);
   ASSERT_EQ("def", tmp[3..5]);
   ASSERT_EQ("bcdefg", tmp[<6..6]);
+
+  // Compat: index underflow is ignored.
+  ASSERT_EQ(tmp, tmp[-999..]);
+
 
   // lvalue out of bound
   ASSERT(catch(tmp[0..strlen(tmp)] = ""));
