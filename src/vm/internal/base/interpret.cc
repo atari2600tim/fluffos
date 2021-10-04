@@ -954,7 +954,8 @@ void assign_lvalue_codepoint(F &&func) {
     }
     auto res = new_string(SVALUE_STRLEN(global_lvalue_codepoint.owner) - old_len + new_len,
                           "assign_lvalue_codepoint");
-    u8_copy_and_replace_codepoint_at(global_lvalue_codepoint.owner->u.string, res,
+    u8_copy_and_replace_codepoint_at(global_lvalue_codepoint.owner->u.string,
+                                     SVALUE_STRLEN(global_lvalue_codepoint.owner), res,
                                      global_lvalue_codepoint.index, c);
 
     free_string_svalue(global_lvalue_codepoint.owner);
@@ -2033,9 +2034,9 @@ void eval_instruction(char *p) {
             push_number(*global_lvalue_byte.u.lvalue_byte);
             break;
           } else if (reflval->type == T_LVALUE_CODEPOINT) {
-            push_number(u8_egc_index_as_single_codepoint(global_lvalue_codepoint.owner->u.string,
-                                                         SVALUE_STRLEN(global_lvalue_codepoint.owner),
-                                                         global_lvalue_codepoint.index));
+            push_number(u8_egc_index_as_single_codepoint(
+                global_lvalue_codepoint.owner->u.string,
+                SVALUE_STRLEN(global_lvalue_codepoint.owner), global_lvalue_codepoint.index));
             break;
           }
         }
@@ -2658,8 +2659,7 @@ void eval_instruction(char *p) {
                 sp->u.lvalue->subtype = 0;
                 sp->u.lvalue->u.number = u8_egc_index_as_single_codepoint(
                     global_lvalue_codepoint.owner->u.string,
-                    SVALUE_STRLEN(global_lvalue_codepoint.owner),
-                    global_lvalue_codepoint.index++);
+                    SVALUE_STRLEN(global_lvalue_codepoint.owner), global_lvalue_codepoint.index++);
               }
             } else {
               if (sp->type == T_REF) {
