@@ -95,7 +95,9 @@ void vm_start() {
     debug_message("Loading simul_efun file : %s\n", CONFIG_STR(__SIMUL_EFUN_FILE__));
     init_simul_efun(CONFIG_STR(__SIMUL_EFUN_FILE__));
     debug_message("Loading master file: %s\n", CONFIG_STR(__MASTER_FILE__));
+    debug_message("TIM: about to load master file");
     init_master(CONFIG_STR(__MASTER_FILE__));
+    debug_message("TIM: loaded master file, still inside the try statement");
   } catch (const char *) {
     debug_message("The simul_efun (%s) and master (%s) objects must be loadable.\n",
                   CONFIG_STR(__SIMUL_EFUN_FILE__), CONFIG_STR(__MASTER_FILE__));
@@ -104,14 +106,20 @@ void vm_start() {
     pop_context(&econ);
     exit(-1);
   }
+  debug_message("TIM: loaded the simul_efun and master, about to pop_context");
   pop_context(&econ);
+  debug_message("TIM: did the pop_context");
 
   // TODO: move this to correct location.
 #ifdef PACKAGE_MUDLIB_STATS
+  debug_message("TIM: about to restore_stat_files");
   restore_stat_files();
+  debug_message("TIM: just ran restore_stat_files");
 #endif
 
+  debug_message("TIM: about to preload_objects");
   preload_objects();
+  debug_message("TIM: ran preload_objects");
 }
 
 /*
