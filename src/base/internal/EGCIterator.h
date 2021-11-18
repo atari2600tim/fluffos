@@ -28,6 +28,8 @@ class BreakIteratorPool {
       auto origin = origin_.lock();
       if (origin) {
         origin->stack_.emplace(ptr);
+      } else {
+        delete ptr;
       }
     }
 
@@ -51,7 +53,7 @@ class BreakIteratorPool {
  public:
   using item_type = std::unique_ptr<icu::BreakIterator, ReturnToPool_Deleter>;
 
-  BreakIteratorPool(int initial) : inner_(new BreakIteratorPoolInner) {
+  explicit BreakIteratorPool(int initial) : inner_(std::make_shared<BreakIteratorPoolInner>()) {
     for (int i = 0; i < initial; i++) add();
   }
 
@@ -68,7 +70,6 @@ class BreakIteratorPool {
 // can access underlying icu::BreakIterator
 class EGCIterator {
  private:
-  UText text_ = UTEXT_INITIALIZER;
   bool ok_ = false;
   const char* src_;
   int32_t len_;
@@ -88,19 +89,23 @@ class EGCIterator {
   void reset(const char* src, int32_t slen) {
     ok_ = false;
 
+    UText text = UTEXT_INITIALIZER;
     UErrorCode status = U_ZERO_ERROR;
-    utext_openUTF8(&text_, src, slen, &status);
+    utext_openUTF8(&text, src, slen, &status);
     if (!U_SUCCESS(status)) {
-      utext_close(&text_);
+      utext_close(&text);
       return;
     }
 
     status = U_ZERO_ERROR;
-    brk_->setText(&text_, status);
+    brk_->setText(&text, status);  // copies text
     if (!U_SUCCESS(status)) {
-      utext_close(&text_);
+      utext_close(&text);
       return;
     }
+    // no longer needed.
+    utext_close(&text);
+
     brk_->first();
 
     src_ = src;
@@ -111,13 +116,10 @@ class EGCIterator {
 
   static BreakIteratorPool::item_type GetBreakIterator() { return pool()->accquire(); }
 
-  EGCIterator(const char* src, int32_t slen) : src_(src), len_(slen), brk_(GetBreakIterator()) { reset(src, slen); }
-
-  ~EGCIterator() {
-    if (this->ok()) {
-      utext_close(&text_);
-      brk_.reset();
-    }
+  EGCIterator(const char* src, int32_t slen) : src_(src), len_(slen), brk_(GetBreakIterator()) {
+    reset(src, slen);
   }
+
+  virtual ~EGCIterator() {}
 };
 #endif  // FLUFFOS_SRC_BASE_INTERNAL_STRUTILS_CC_EGCSTRINGVIEW_H_
