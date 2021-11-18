@@ -111,10 +111,11 @@ UChar32 u8_egc_index_as_single_codepoint(const char *src, int32_t src_len, int32
 }
 
 // Copy string src to dest, replacing character at index to c. Assuming dst is already allocated.
-void u8_copy_and_replace_codepoint_at(const char *src, int32_t slen, char *dst, int32_t index,
-                                      UChar32 c) {
-  EGCSmartIterator iter(src, slen);
+void u8_copy_and_replace_codepoint_at(EGCSmartIterator &iter, char *dst, int32_t index, UChar32 c) {
   if (!iter.ok()) return;
+
+  const char *src = iter.data();
+  int32_t slen = iter.len();
 
   int32_t src_offset = iter.index_to_offset(index);
   int32_t dst_offset = 0;
@@ -125,7 +126,7 @@ void u8_copy_and_replace_codepoint_at(const char *src, int32_t slen, char *dst, 
   U8_APPEND_UNSAFE(dst, dst_offset, c);
 
   U8_FWD_1_UNSAFE(src, src_offset);
-  strcpy(dst + dst_offset, src + src_offset);
+  memcpy(dst + dst_offset, src + src_offset, slen - src_offset + 1);
 }
 
 // Get the byte offset to the egc index, return -1 for non boundary.
@@ -492,8 +493,12 @@ size_t u8_width(const char *src, int len) {
     auto width = widechar_wcwidth(c);
     if (width > 0) {
       total += width;
-    } else if (width == widechar_ambiguous) {
+    } else if (width == widechar_widened_in_9) {
       total += 2;
+    } else if (width == widechar_private_use) {
+      total += 1;
+    } else if (width == widechar_ambiguous) {
+      total += 1;
     }
     if (len > 0 && src_offset >= len) break;
   }
