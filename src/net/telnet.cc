@@ -2,6 +2,7 @@
 
 #include "net/telnet.h"
 #include "net/sys_telnet.h"  // our own version of telnet header.
+#include "net/msp.h"
 
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
@@ -26,6 +27,7 @@ static const telnet_telopt_t my_telopts[] = {{TELNET_TELOPT_TM, TELNET_WILL, TEL
                                              {TELNET_TELOPT_MSSP, TELNET_WILL, TELNET_DO},
                                              {TELNET_TELOPT_GMCP, TELNET_WILL, TELNET_DO},
                                              {TELNET_TELOPT_CHARSET, TELNET_WILL, TELNET_DO},
+                                             {TELNET_TELOPT_MSP, TELNET_WILL, TELNET_DO},
                                              {-1, 0, 0}};
 
 // Telnet event handler
@@ -160,9 +162,9 @@ static inline void on_telnet_wont(unsigned char cmd, interactive_t *ip) {
 
 static inline void on_telnet_do(unsigned char cmd, interactive_t *ip) {
   switch (cmd) {
-    case TELNET_TELOPT_CHARSET :
-      on_telnet_do_charset(ip->telnet) ;
-      break ;
+    case TELNET_TELOPT_CHARSET:
+      on_telnet_do_charset(ip->telnet);
+      break;
     case TELNET_TELOPT_TM:
       telnet_negotiate(ip->telnet, TELNET_WILL, TELNET_TELOPT_TM);
       break;
@@ -223,6 +225,9 @@ static inline void on_telnet_do(unsigned char cmd, interactive_t *ip) {
     case TELNET_TELOPT_COMPRESS2:
       telnet_begin_compress2(ip->telnet);
       break;
+    case TELNET_TELOPT_MSP:
+      on_telnet_do_msp(ip);
+      break;
     default:
       debug(telnet, "on_telnet_do: unimplemented code: %d.\n", cmd);
       telnet_negotiate(ip->telnet, TELNET_WONT, cmd);
@@ -241,6 +246,9 @@ static inline void on_telnet_dont(unsigned char cmd, interactive_t *ip) {
         ip->iflags &= ~SUPPRESS_GA;
         telnet_negotiate(ip->telnet, TELNET_WONT, TELNET_TELOPT_SGA);
       }
+      break;
+    case TELNET_TELOPT_MSP:
+      on_telnet_dont_msp(ip);
       break;
     default:
       debug(telnet, "on_telnet_dont: unimplemented code: %d.\n", cmd);
@@ -499,7 +507,11 @@ void send_initial_telnet_negotiations(struct interactive_t *user) {
     telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_MSSP);
   }
 
-  telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_CHARSET) ;
+  telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_CHARSET);
+
+  if (CONFIG_INT(__RC_ENABLE_MSP__)) {
+    telnet_negotiate(user->telnet, TELNET_WILL, TELNET_TELOPT_MSP);
+  }
 }
 
 void set_linemode(interactive_t *ip, bool flush) {
@@ -617,9 +629,11 @@ void on_telnet_do_zmp(const char **argv, unsigned long argc, interactive_t *ip) 
 
 /* send CHARSET OF UTF-8 command */
 void on_telnet_do_charset(telnet_t *telnet) {
-	const char utf8[] = { 1, ';', 'U', 'T', 'F', '-', '8', } ;
+  const char utf8[] = {
+      1, ';', 'U', 'T', 'F', '-', '8',
+  };
 
-	telnet_begin_sb(telnet, TELNET_TELOPT_CHARSET) ;
+  telnet_begin_sb(telnet, TELNET_TELOPT_CHARSET);
   telnet_send(telnet, utf8, sizeof(utf8));
-	telnet_finish_sb(telnet) ;
+  telnet_finish_sb(telnet);
 }
