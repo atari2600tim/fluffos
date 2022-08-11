@@ -66,6 +66,8 @@ Projects Using FluffOS
 ----------------------
 [Add Your Own](https://github.com/fluffos/fluffos/edit/master/README.md)
 
+-   [ThresholdRPG](https://wiki.thresholdrpg.com/)
+
 Donations
 ---------
 I would like to personal thank all the sponsors and contributors for showing their support.
@@ -73,10 +75,6 @@ All donations are 100% used towards purchasing tools, equipments and hosting cos
  and forum hosting.
 
 The list is in descending order by time donation received.
-
-##### Received in 2020 Jan
-
-##### Received in 2020 Jan
 
 ##### Received in 2019 Jan
 
