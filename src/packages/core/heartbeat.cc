@@ -36,7 +36,7 @@ void call_heart_beat() {
   // Register for next call
   add_gametick_event(
       time_to_next_gametick(std::chrono::milliseconds(CONFIG_INT(__RC_HEARTBEAT_INTERVAL_MSEC__))),
-      tick_event::callback_type(call_heart_beat));
+      TickEvent::callback_type(call_heart_beat));
 
   heartbeats.insert(heartbeats.end(), heartbeats_next.begin(), heartbeats_next.end());
   heartbeats_next.clear();
@@ -57,15 +57,14 @@ void call_heart_beat() {
       heartbeats_next.push_back(hb);
       heartbeats.pop_front();
     }
-    auto curr_hb = &heartbeats_next.back();
+    auto *curr_hb = &heartbeats_next.back();
 
     if (--curr_hb->heart_beat_ticks > 0) {
       continue;
-    } else {
-      curr_hb->heart_beat_ticks = curr_hb->time_to_heart_beat;
     }
+    curr_hb->heart_beat_ticks = curr_hb->time_to_heart_beat;
 
-    auto ob = curr_hb->ob;
+    auto *ob = curr_hb->ob;
     // No heartbeat function
     if (ob->prog->heart_beat == 0) {
       continue;
@@ -177,36 +176,35 @@ int set_heart_beat(object_t *ob, int to) {
       }
     }
     return found ? 1 : 0;
-  } else {
-    ob->flags |= O_HEART_BEAT;
+  }
+  ob->flags |= O_HEART_BEAT;
 
-    heart_beat_t *target_hb = nullptr;
-    for (auto &hb : heartbeats) {
-      if (hb.ob == ob) {
-        target_hb = &hb;
-        break;
-      }
+  heart_beat_t *target_hb = nullptr;
+  for (auto &hb : heartbeats) {
+    if (hb.ob == ob) {
+      target_hb = &hb;
+      break;
     }
-    for (auto &hb : heartbeats_next) {
-      if (hb.ob == ob) {
-        target_hb = &hb;
-        break;
-      }
+  }
+  for (auto &hb : heartbeats_next) {
+    if (hb.ob == ob) {
+      target_hb = &hb;
+      break;
     }
-    // Add: Didn't find target_hb, we need to create a new one.
-    if (target_hb == nullptr) {
-      target_hb = &heartbeats_next.emplace_back();
-      target_hb->ob = ob;
-      target_hb->time_to_heart_beat = to;
-      target_hb->heart_beat_ticks = to;
-      return 1;
-    } else {
-      // Modifying: target_hb is found.
-      target_hb->ob = ob;
-      target_hb->time_to_heart_beat = to;
-      target_hb->heart_beat_ticks = to;
-      return 1;
-    }
+  }
+  // Add: Didn't find target_hb, we need to create a new one.
+  if (target_hb == nullptr) {
+    target_hb = &heartbeats_next.emplace_back();
+    target_hb->ob = ob;
+    target_hb->time_to_heart_beat = to;
+    target_hb->heart_beat_ticks = to;
+    return 1;
+  } else {
+    // Modifying: target_hb is found.
+    target_hb->ob = ob;
+    target_hb->time_to_heart_beat = to;
+    target_hb->heart_beat_ticks = to;
+    return 1;
   }
 }
 
@@ -248,7 +246,7 @@ array_t *get_heart_beats() {
 
   array_t *arr = allocate_empty_array(result.size());
   int i = 0;
-  for (auto obj : result) {
+  for (auto *obj : result) {
     arr->item[i].type = T_OBJECT;
     arr->item[i].u.ob = obj;
     add_ref(arr->item[i].u.ob, "get_heart_beats");
@@ -265,7 +263,7 @@ void check_heartbeats() {
       DEBUG_CHECK(!objset.insert(hb.ob).second, "Driver BUG: Duplicated/Missing heartbeats found");
     }
   }
-  for (auto hb : heartbeats_next) {
+  for (auto &hb : heartbeats_next) {
     if (hb.ob) {
       DEBUG_CHECK(!objset.insert(hb.ob).second, "Driver BUG: Duplicated/Missing heartbeats found");
     }
