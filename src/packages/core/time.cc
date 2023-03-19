@@ -8,16 +8,18 @@
 #ifdef F_PERF_COUNTER_NS
 void f_perf_counter_ns() {
 #ifdef _WIN32
-  static LARGE_INTEGER Frequency{};
-  if (Frequency.QuadPart == 0) {
-    QueryPerformanceFrequency(&Frequency);
-  }
-
+  FILETIME ft;
   LARGE_INTEGER t;
-  QueryPerformanceCounter(&t);
 
-  push_number(t.QuadPart * 1000000 / Frequency.QuadPart);
-#else
+  GetSystemTimePreciseAsFileTime(&ft);
+
+  t.LowPart = ft.dwLowDateTime;
+  t.HighPart = ft.dwHighDateTime;
+
+  // GetSystemTimePreciseAsFileTime is in units of 100 ns
+  // magic number of 11644473600 is number of seconds difference between the win32 epoch of 1601 and unix epoch of 1970
+  push_number((t.QuadPart-116444736000000000) * 100 );
+ #else
   auto now = std::chrono::high_resolution_clock::now();
   push_number(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
 #endif
