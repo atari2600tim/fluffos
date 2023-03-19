@@ -9,7 +9,7 @@
 
 #include "packages/sockets/socket_efuns.h"
 
-#include <inttypes.h>
+#include <cinttypes>
 #include <event2/event.h>
 #include <event2/util.h>
 #include <deque>
@@ -21,7 +21,7 @@
 #include <ws2tcpip.h>
 #define ERR(e) WSA##e
 #else
-#include <errno.h>
+#include <cerrno>
 #define ERR(e) e
 #endif
 
@@ -127,7 +127,9 @@ static bool lpcaddr_to_sockaddr(const char *name, struct sockaddr *addr, ev_sock
   struct addrinfo hints = {0}, *res;
 #ifdef IPV6
   hints.ai_family = AF_UNSPEC;
+#ifdef AI_V4MAPPED
   hints.ai_flags |= AI_V4MAPPED;
+#endif
 #else
   hints.ai_family = AF_INET;
 #endif
@@ -450,7 +452,10 @@ int socket_bind(int fd, int port, const char *addr) {
     hints.ai_family = AF_INET;
 #endif
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE | AI_V4MAPPED;
+    hints.ai_flags = AI_PASSIVE;
+#ifdef AI_V4MAPPED
+    hints.ai_flags |= AI_V4MAPPED;
+#endif
     hints.ai_protocol = 0; /* Any protocol */
 
     int ret;
@@ -736,8 +741,8 @@ int socket_write(int fd, svalue_t *message, const char *name) {
   int len, off;
   char *buf, *p;
 
-  struct sockaddr_storage addr;
-  socklen_t addrlen;
+  struct sockaddr_storage addr = {};
+  socklen_t addrlen = 0;
 
   if (fd < 0 || fd >= lpc_socks.size()) {
     return EEFDRANGE;
@@ -1031,9 +1036,9 @@ void socket_read_select_handler(int fd) {
           // Translate socket address into "address port" format.
           {
             char host[NI_MAXHOST], service[NI_MAXSERV];
-            int ret = getnameinfo(reinterpret_cast<struct sockaddr *>(&sockaddr), addrlen, host,
-                                  sizeof(host), service, sizeof(service),
-                                  NI_NUMERICHOST | NI_NUMERICSERV);
+            int const ret = getnameinfo(reinterpret_cast<struct sockaddr *>(&sockaddr), addrlen,
+                                        host, sizeof(host), service, sizeof(service),
+                                        NI_NUMERICHOST | NI_NUMERICSERV);
             if (ret) {
               debug(sockets, "socket_read_select_handler: bad addr: %s", evutil_gai_strerror(ret));
               addr[0] = '\0';
@@ -1195,6 +1200,8 @@ void socket_read_select_handler(int fd) {
   }
   if (cc == -1) {
     auto e = evutil_socket_geterror(lpc_socks[fd].fd);
+    debug(sockets, "read_socket_handler: %d (fd %d), error: (%d) %s.\n", fd, lpc_socks[fd].fd, e,
+          evutil_socket_error_to_string(e));
     switch (e) {
       case ERR(ECONNREFUSED):
         /* Evidentally, on Linux 1.2.1, ECONNREFUSED gets returned
@@ -1479,8 +1486,8 @@ int get_socket_address(int fd, char *addr, int *port, int local) {
   addrlen = (local ? lpc_socks[fd].l_addrlen : lpc_socks[fd].r_addrlen);
 
   char host[NI_MAXHOST], service[NI_MAXSERV];
-  int ret = getnameinfo(sockaddr, addrlen, host, sizeof(host), service, sizeof(service),
-                        NI_NUMERICHOST | NI_NUMERICSERV);
+  int const ret = getnameinfo(sockaddr, addrlen, host, sizeof(host), service, sizeof(service),
+                              NI_NUMERICHOST | NI_NUMERICSERV);
   if (ret) {
 #ifdef IPV6
     strcpy(addr, "::");
@@ -1552,8 +1559,8 @@ static char *sockaddr_to_lpcaddr(struct sockaddr *addr, socklen_t len) {
   }
 
   char host[NI_MAXHOST], service[NI_MAXSERV];
-  int ret = getnameinfo(addr, len, host, sizeof(host), service, sizeof(service),
-                        NI_NUMERICHOST | NI_NUMERICSERV);
+  int const ret = getnameinfo(addr, len, host, sizeof(host), service, sizeof(service),
+                              NI_NUMERICHOST | NI_NUMERICSERV);
 
   if (ret) {
     debug(sockets, "sockaddr_to_string: %s.\n", evutil_gai_strerror(ret));
@@ -1628,7 +1635,7 @@ lpc_socket_t *lpc_socks_get(int i) {
 
 #ifdef DEBUGMALLOC_EXTENSIONS
 // Mark all lpc sockets.
-void mark_sockets(void) {
+void mark_sockets() {
   int i;
   const char *s;
 

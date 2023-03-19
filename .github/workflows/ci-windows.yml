@@ -28,13 +28,13 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           update: true
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Install
         run: |
           if [ "$MSYSTEM" = "MINGW32" ]; then
             echo "TODO"
           else
-            pacman --noconfirm -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-zlib mingw-w64-x86_64-pcre mingw-w64-x86_64-icu mingw-w64-x86_64-sqlite3
+            pacman --noconfirm -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-zlib mingw-w64-x86_64-pcre mingw-w64-x86_64-icu mingw-w64-x86_64-sqlite3 mingw-w64-x86_64-jemalloc
           fi
           pacman --noconfirm -S --needed bison make
       - name: Build

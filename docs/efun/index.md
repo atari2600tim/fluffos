@@ -314,6 +314,16 @@ title: EFUN
 </div>
 
 <h2 class="border-bottom py-3 text-uppercase">
+  <img src="https://cdnjs.cloudflare.com/ajax/libs/octicons/8.5.0/svg/bookmark.svg"><a class='text-secondary' name="external" href="#external">external</a>
+</h2>
+
+<div class='row'>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='external/external_start.html'>external_start</a></div>
+</div>
+</div>
+
+<h2 class="border-bottom py-3 text-uppercase">
   <img src="https://cdnjs.cloudflare.com/ajax/libs/octicons/8.5.0/svg/bookmark.svg"><a class='text-secondary' name="filesystem" href="#filesystem">filesystem</a>
 </h2>
 
@@ -494,6 +504,9 @@ title: EFUN
 <div><a href='interactive/get_char.html'>get_char</a></div>
 </div>
 <div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='interactive/has_gmcp.html'>has_gmcp</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
 <div><a href='interactive/in_edit.html'>in_edit</a></div>
 </div>
 <div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
@@ -546,6 +559,9 @@ title: EFUN
 </div>
 <div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
 <div><a href='interactive/say.html'>say</a></div>
+</div>
+<div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
+<div><a href='interactive/send_gmcp.html'>send_gmcp</a></div>
 </div>
 <div class='col-sm-4 col-md-3 col-lg-3 col-xl-2'>
 <div><a href='interactive/set_encoding.html'>set_encoding</a></div>
@@ -1128,6 +1144,6 @@ title: EFUN
 
 <div class="alert alert-info my-4" role="alert">
     <img src="https://cdnjs.cloudflare.com/ajax/libs/octicons/8.5.0/svg/info.svg">
-    This page is auto generated on 2022-07-06 16:19:27 CST for v2019.20220507-7-g64a2b14d-dirty.</a>
+    This page is auto generated on 2022-11-07 21:42:34 EST for v2019.20210429-116-g24f357c7-dirty.</a>
 </div>
 
