@@ -153,6 +153,53 @@ int external_start(int which, svalue_t *args, svalue_t *arg1, svalue_t *arg2, sv
 }
 #endif
 
+namespace {
+std::string quote_argument(const std::string &arg) {
+  if (arg.empty()) {
+    return "\"\"";
+  }
+  if (arg.find_first_of(" \t\n\v\"") == std::string::npos) {
+    return arg;
+  }
+  std::string res = "\"";
+  // from
+  // https://learn.microsoft.com/en-us/archive/blogs/twistylittlepassagesallalike/everyone-quotes-command-line-arguments-the-wrong-way
+  for (auto It = arg.begin();; ++It) {
+    unsigned NumberBackslashes = 0;
+
+    while (It != arg.end() && *It == '\\') {
+      ++It;
+      ++NumberBackslashes;
+    }
+
+    if (It == arg.end()) {
+      //
+      // Escape all backslashes, but let the terminating
+      // double quotation mark we add below be interpreted
+      // as a metacharacter.
+      //
+      res.append(NumberBackslashes * 2, '\\');
+      break;
+    } else if (*It == '"') {
+      //
+      // Escape all backslashes and the following
+      // double quotation mark.
+      //
+      res.append(NumberBackslashes * 2 + 1, '\\');
+      res.push_back(*It);
+    } else {
+      //
+      // Backslashes aren't special here.
+      //
+      res.append(NumberBackslashes, '\\');
+      res.push_back(*It);
+    }
+  }
+  res.push_back('"');
+  return res;
+}
+}  // namespace
+
 #ifdef _WIN32
 #include <windows.h>
 #include <fcntl.h>
@@ -177,9 +224,9 @@ int external_start(int which, svalue_t *args, svalue_t *arg1, svalue_t *arg2, sv
       if (item.type != T_STRING) {
         error("Bad argument list item %d to external_start()\n", i);
       }
-      argv.emplace_back(item.u.string);
+      argv.emplace_back(quote_argument(item.u.string));
     }
-    cmdline += fmt::format("{}", fmt::join(argv.begin(), argv.end(), " "));
+    cmdline += fmt::to_string(fmt::join(argv.begin(), argv.end(), " "));
   } else {
     cmdline += std::string(args->u.string);
   }
@@ -189,7 +236,7 @@ int external_start(int which, svalue_t *args, svalue_t *arg1, svalue_t *arg2, sv
     return fd;
   }
 
-  auto sock = lpc_socks_get(fd);
+  auto *sock = lpc_socks_get(fd);
 
   SOCKET sv[2];
   socketpair_win32(sv, 0);
@@ -254,6 +301,7 @@ int external_start(int which, svalue_t *args, svalue_t *arg1, svalue_t *arg2, sv
     debug_message("pid: %d exited with %d.\n", processInfo.dwProcessId, exitCode);
     CloseHandle(processInfo.hProcess);
     CloseHandle(processInfo.hThread);
+    evutil_closesocket(sv[0]);
   }).detach();
 
   return fd;

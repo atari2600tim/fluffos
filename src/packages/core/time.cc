@@ -16,7 +16,7 @@ void f_perf_counter_ns() {
   LARGE_INTEGER t;
   QueryPerformanceCounter(&t);
 
-  push_number(t.QuadPart * 1000000 / Frequency.QuadPart);
+  push_number(t.QuadPart * 1000000000 / Frequency.QuadPart);
 #else
   auto now = std::chrono::high_resolution_clock::now();
   push_number(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
@@ -26,6 +26,13 @@ void f_perf_counter_ns() {
 
 #ifdef F_TIME
 void f_time() { push_number(get_current_time()); }
+#endif
+
+#ifdef F_TIME_NS
+void f_time_ns() {
+  auto now = std::chrono::system_clock::now();
+  push_number(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
+}
 #endif
 
 #ifdef F_CTIME

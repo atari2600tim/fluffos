@@ -480,7 +480,8 @@ object_t *load_object(const char *lname, int callcreate) {
     error("Could not read the file '/%s'.\n", real_name);
   }
   save_command_giver(command_giver);
-  prog = compile_file(f, obname);
+  auto stream = std::make_unique<FileLexStream>(f);
+  prog = compile_file(std::move(stream), obname);
   restore_command_giver();
   update_compile_av(total_lines);
   total_lines = 0;
@@ -1939,6 +1940,8 @@ exit:
 }
 
 [[noreturn]] void error_needs_free(char *s) {
+  DEBUG_CHECK(current_error_context == nullptr, "error() without context");
+
   char err_buf[2048];
   strncpy(err_buf + 1, s, 2047);
   err_buf[0] = '*'; /* all system errors get a * at the start */
@@ -1949,6 +1952,8 @@ exit:
 }
 
 [[noreturn]] void error(const char *const fmt, ...) {
+  DEBUG_CHECK(current_error_context == nullptr, "error() without context");
+
   char err_buf[2048];
   va_list args;
 

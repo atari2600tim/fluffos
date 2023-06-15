@@ -482,11 +482,6 @@ if (HAVE_CLOCK_GETTIME_IN_RT)
   target_link_libraries(libdriver PUBLIC rt)
 endif ()
 
-# GTEST
-#include(GoogleTest)
-#enable_testing()
-#gtest_discover_tests(driver)
-
 set(LINK_WHOLE_ARCHIVE -Wl,--whole-archive)
 set(LINK_NO_WHOLE_ARCHIVE -Wl,--no-whole-archive)
 if (APPLE)
@@ -541,6 +536,13 @@ if (${BISON_FOUND})
           COMMAND "${CMAKE_COMMAND}" -E copy "${BISON_Grammar_OUTPUT_SOURCE}" ${CMAKE_CURRENT_SOURCE_DIR}/compiler/internal/
           COMMAND "${CMAKE_COMMAND}" -E copy "${BISON_Grammar_OUTPUT_HEADER}" ${CMAKE_CURRENT_SOURCE_DIR}/compiler/internal/
           COMMENT "Copying to output directory")
+endif()
+
+find_package(GTest)
+if(${GTEST_FOUND})
+  include(GoogleTest)
+  enable_testing()
+  add_subdirectory(tests)
 endif()
 
 # Must keep this line at the end, so we get all the variables.
