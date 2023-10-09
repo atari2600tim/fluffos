@@ -4,7 +4,7 @@
 #include <vector>
 #include <string>
 #include <memory>
-#include <string.h>
+#include <cstring>
 
 #include "thirdparty/utf8_decoder_dfa/decoder.h"
 #include "thirdparty/widecharwidth/widechar_width.h"
@@ -14,20 +14,29 @@
 #include "base/internal/rc.h"
 #include "base/internal/EGCIterator.h"
 
-bool u8_validate(const char *s) {
-  auto p = (const uint8_t *)s;
+bool u8_validate(char **s) {
+  const auto *p = (const uint8_t *)(*s);
   uint32_t codepoint, state = 0;
 
-  while (*p) decode(&state, &codepoint, *p++);
+  while (*p && state != UTF8_REJECT) decode(&state, &codepoint, *p++);
+  *s = (char *)p;
+  return state == UTF8_ACCEPT;
+}
+
+bool u8_validate(const char *s) {
+  const auto *p = (const uint8_t *)s;
+  uint32_t codepoint, state = 0;
+
+  while (*p && state != UTF8_REJECT) decode(&state, &codepoint, *p++);
 
   return state == UTF8_ACCEPT;
 }
 
 bool u8_validate(const uint8_t *s, size_t len) {
-  auto end = s + len;
+  const auto *end = s + len;
   uint32_t codepoint, state = 0;
 
-  while (s < end && *s) decode(&state, &codepoint, *s++);
+  while (s < end && *s && state != UTF8_REJECT) decode(&state, &codepoint, *s++);
 
   return state == UTF8_ACCEPT;
 }
@@ -38,7 +47,7 @@ std::string u8_sanitize(std::string_view src) { return utf8::replace_invalid(src
 int32_t u8_egc_find_as_offset(EGCIterator &iter, const char *needle, size_t needle_len,
                               bool reverse) {
   const char *haystack = iter.data();
-  size_t haystack_len = iter.len() == -1 ? strlen(haystack) : iter.len();
+  size_t const haystack_len = iter.len() == -1 ? strlen(haystack) : iter.len();
 
   // no way
   if (needle_len > haystack_len) {
@@ -50,7 +59,7 @@ int32_t u8_egc_find_as_offset(EGCIterator &iter, const char *needle, size_t need
   if (!reverse) {
     bool is_all_ascii = false;
     for (int i = 0; i < 4 && i < needle_len; i++) {
-      char c = needle[i];
+      char const c = needle[i];
       is_all_ascii = c >= 0;
       if (!is_all_ascii) break;
       if (c == '\0') break;
@@ -67,8 +76,8 @@ int32_t u8_egc_find_as_offset(EGCIterator &iter, const char *needle, size_t need
 
   int res = -1;
 
-  std::string_view sv_haystack(haystack, haystack_len);
-  std::string_view sv_needle(needle, needle_len);
+  std::string_view const sv_haystack(haystack, haystack_len);
+  std::string_view const sv_needle(needle, needle_len);
   auto pos = std::string_view::npos;
   if (!reverse) {
     pos = 0;
@@ -111,10 +120,11 @@ UChar32 u8_egc_index_as_single_codepoint(const char *src, int32_t src_len, int32
 }
 
 // Copy string src to dest, replacing character at index to c. Assuming dst is already allocated.
-void u8_copy_and_replace_codepoint_at(const char *src, int32_t slen, char *dst, int32_t index,
-                                      UChar32 c) {
-  EGCSmartIterator iter(src, slen);
+void u8_copy_and_replace_codepoint_at(EGCSmartIterator &iter, char *dst, int32_t index, UChar32 c) {
   if (!iter.ok()) return;
+
+  const char *src = iter.data();
+  int32_t const slen = iter.len();
 
   int32_t src_offset = iter.index_to_offset(index);
   int32_t dst_offset = 0;
@@ -125,7 +135,7 @@ void u8_copy_and_replace_codepoint_at(const char *src, int32_t slen, char *dst, 
   U8_APPEND_UNSAFE(dst, dst_offset, c);
 
   U8_FWD_1_UNSAFE(src, src_offset);
-  strcpy(dst + dst_offset, src + src_offset);
+  memcpy(dst + dst_offset, src + src_offset, slen - src_offset + 1);
 }
 
 // Get the byte offset to the egc index, return -1 for non boundary.
@@ -474,8 +484,8 @@ size_t u8_width(const char *src, int len) {
     // format is "\x1b[X;Ym"
     if (CONFIG_INT(__RC_SPRINTF_ADD_JUSTFIED_IGNORE_ANSI_COLORS__)) {
       if (c == 0x1B) {
-        auto p = src + src_offset;
-        auto end = (len > 0) ? src + len : nullptr;
+        const auto *p = src + src_offset;
+        const auto *end = (len > 0) ? src + len : nullptr;
         if (p != end && *p == '[') {
           p++;
           // we don't check validity here, just assume valid code
@@ -492,8 +502,12 @@ size_t u8_width(const char *src, int len) {
     auto width = widechar_wcwidth(c);
     if (width > 0) {
       total += width;
-    } else if (width == widechar_ambiguous) {
+    } else if (width == widechar_widened_in_9) {
       total += 2;
+    } else if (width == widechar_private_use) {
+      total += 1;
+    } else if (width == widechar_ambiguous) {
+      total += 1;
     }
     if (len > 0 && src_offset >= len) break;
   }

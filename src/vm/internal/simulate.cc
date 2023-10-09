@@ -130,12 +130,6 @@ static char *make_new_name(const char * /*str*/);
 static void send_say(object_t * /*ob*/, const char * /*text*/, array_t * /*avoid*/);
 #endif
 
-void check_legal_string(const char *s) {
-  if (strlen(s) > LARGEST_PRINTABLE_STRING) {
-    error("Printable strings limited to length of %d.\n", LARGEST_PRINTABLE_STRING);
-  }
-}
-
 #ifdef PRIVS
 static void init_privs_for_object(object_t *ob) {
   svalue_t *value;
@@ -412,7 +406,8 @@ int filename_to_obname(const char *src, char *dest, int size) {
  *
  */
 object_t *load_object(const char *lname, int callcreate) {
-  ScopedTracer _tracer("LPC Load Object", EventCategory::VM_LOAD_OBJECT, json{lname});
+  ScopedTracer _tracer("LPC Load Object", EventCategory::VM_LOAD_OBJECT,
+                       [=] { return json{lname}; });
 
   auto inherit_chain_size = CONFIG_INT(__INHERIT_CHAIN_SIZE__);
 
@@ -479,7 +474,8 @@ object_t *load_object(const char *lname, int callcreate) {
     error("Could not read the file '/%s'.\n", real_name);
   }
   save_command_giver(command_giver);
-  prog = compile_file(f, obname);
+  auto stream = std::make_unique<FileLexStream>(f);
+  prog = compile_file(std::move(stream), obname);
   restore_command_giver();
   update_compile_av(total_lines);
   total_lines = 0;
@@ -1156,7 +1152,6 @@ void say(svalue_t *v, array_t *avoid) {
   object_t *ob, *origin;
   const char *buff;
 
-  check_legal_string(v->u.string);
   buff = v->u.string;
 
   if (current_object->flags & O_LISTENER || current_object->interactive) {
@@ -1212,7 +1207,6 @@ void tell_room(object_t *room, svalue_t *v, array_t *avoid) {
 
   switch (v->type) {
     case T_STRING:
-      check_legal_string(v->u.string);
       buff = v->u.string;
       break;
     case T_OBJECT:
@@ -1270,8 +1264,6 @@ void tell_room(object_t *room, svalue_t *v, array_t *avoid) {
 
 void shout_string(const char *str) {
   object_t *ob;
-
-  check_legal_string(str);
 
   for (ob = obj_list; ob; ob = ob->next_all) {
     if (!(ob->flags & O_LISTENER) || (ob == command_giver)
@@ -1392,10 +1384,6 @@ void print_svalue(svalue_t *arg) {
     switch (arg->type) {
       case T_STRING:
         len = SVALUE_STRLEN(arg);
-        if (len > LARGEST_PRINTABLE_STRING) {
-          error("Printable strings limited to length of %d.\n", LARGEST_PRINTABLE_STRING);
-        }
-
         tell_object(command_giver, arg->u.string, len);
         break;
       case T_OBJECT:
@@ -1645,7 +1633,7 @@ void free_sentence(sentence_t *p) {
 
 [[noreturn]] void fatal(const char *fmt, ...) {
   static int in_fatal = 0;
-  char msg_buf[2049];
+  char msg_buf[2049] = {};
   va_list args;
 
   switch (in_fatal) {
@@ -1938,6 +1926,8 @@ exit:
 }
 
 [[noreturn]] void error_needs_free(char *s) {
+  DEBUG_CHECK(current_error_context == nullptr, "error() without context");
+
   char err_buf[2048];
   strncpy(err_buf + 1, s, 2047);
   err_buf[0] = '*'; /* all system errors get a * at the start */
@@ -1948,6 +1938,8 @@ exit:
 }
 
 [[noreturn]] void error(const char *const fmt, ...) {
+  DEBUG_CHECK(current_error_context == nullptr, "error() without context");
+
   char err_buf[2048];
   va_list args;
 

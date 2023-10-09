@@ -6,6 +6,7 @@ extern object_t **hashed_living;
 
 void init_living();
 int parse_command(char *, object_t *);
+void safe_parse_command(char *, object_t *);
 void clear_notify(object_t *);
 void stat_living_objects(outbuffer_t *);
 void remove_living_name(object_t *);
@@ -16,6 +17,9 @@ void remove_sent(object_t *, object_t *);
 #endif
 #else
 /* STUBS */
+#define safe_parse_command(x, y) \
+  do {                      \
+  } while (0)
 #define parse_command(x, y) \
   do {                      \
   } while (0)

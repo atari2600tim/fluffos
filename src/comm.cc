@@ -13,9 +13,9 @@
 #include <event2/event.h>     // for EV_TIMEOUT, etc
 #include <event2/listener.h>  // for evconnlistener_free, etc
 #include <event2/util.h>      // for evutil_closesocket, etc
-#include <stdarg.h>           // for va_end, va_list, va_copy, etc
-#include <stdio.h>            // for snprintf, vsnprintf, fwrite, etc
-#include <string.h>           // for NULL, memcpy, strlen, etc
+#include <cstdarg>            // for va_end, va_list, va_copy, etc
+#include <cstdio>             // for snprintf, vsnprintf, fwrite, etc
+#include <cstring>            // for NULL, memcpy, strlen, etc
 #include <unistd.h>           // for gethostname
 #include <memory>             // for unique_ptr
 // Network stuff
@@ -58,7 +58,7 @@ static void print_prompt(interactive_t * /*ip*/);
 #define handle_snoop(str, len, who)
 #else
 #define handle_snoop(str, len, who) \
-  if ((who)->snooped_by) receive_snoop(str, len, who->snooped_by)
+  if ((who)->snooped_by) receive_snoop(str, len, (who)->snooped_by)
 
 static void receive_snoop(const char * /*buf*/, int /*len*/, object_t *ob);
 
@@ -66,7 +66,7 @@ static void receive_snoop(const char * /*buf*/, int /*len*/, object_t *ob);
 
 namespace {
 // User socket event
-struct user_event_data {
+struct UserEventData {
   int idx;
 };
 
@@ -83,24 +83,15 @@ void on_user_command(evutil_socket_t fd, short what, void *arg) {
   debug(event, "User has an full command ready: %d:%s%s%s%s \n", (int)fd,
         (what & EV_TIMEOUT) ? " timeout" : "", (what & EV_READ) ? " read" : "",
         (what & EV_WRITE) ? " write" : "", (what & EV_SIGNAL) ? " signal" : "");
-  auto user = reinterpret_cast<interactive_t *>(arg);
+  auto *user = reinterpret_cast<interactive_t *>(arg);
 
   if (user == nullptr) {
     DEBUG_FATAL("on_user_command: user == NULL, Driver BUG.");
     return;
   }
 
-  // FIXME: this function currently calls into mudlib and will throw errors
-  // This catch block should be moved one level down.
-  error_context_t econ;
-  save_context(&econ);
   set_eval(max_eval_cost);
-  try {
-    process_user_command(user);
-  } catch (const char *) {
-    restore_context(&econ);
-  }
-  pop_context(&econ);
+  process_user_command(user);
 
   /* Has to be cleared if we jumped out of process_user_command() */
   current_interactive = nullptr;
@@ -116,8 +107,8 @@ void on_user_command(evutil_socket_t fd, short what, void *arg) {
   // maybe_schedule_user_command(user);
 }
 
-void on_user_read(bufferevent *bev, void *arg) {
-  auto user = reinterpret_cast<interactive_t *>(arg);
+void on_user_read(bufferevent * /*bev*/, void *arg) {
+  auto *user = reinterpret_cast<interactive_t *>(arg);
 
   if (user == nullptr) {
     DEBUG_FATAL("on_user_read: user == NULL, Driver BUG.");
@@ -131,8 +122,8 @@ void on_user_read(bufferevent *bev, void *arg) {
   // should probably move it here.
 }
 
-void on_user_write(bufferevent *bev, void *arg) {
-  auto user = reinterpret_cast<interactive_t *>(arg);
+void on_user_write(bufferevent * /*bev*/, void *arg) {
+  auto *user = reinterpret_cast<interactive_t *>(arg);
   if (user == nullptr) {
     DEBUG_FATAL("on_user_write: user == NULL, Driver BUG.");
     return;
@@ -140,8 +131,8 @@ void on_user_write(bufferevent *bev, void *arg) {
   // nothing to do.
 }
 
-void on_user_events(bufferevent *bev, short events, void *arg) {
-  auto user = reinterpret_cast<interactive_t *>(arg);
+void on_user_events(bufferevent * /*bev*/, short events, void *arg) {
+  auto *user = reinterpret_cast<interactive_t *>(arg);
 
   if (user == nullptr) {
     DEBUG_FATAL("on_user_events: user == NULL, Driver BUG.");
@@ -197,26 +188,26 @@ void new_conn_handler(evconnlistener *listener, evutil_socket_t fd, struct socka
     }
   }
 
-  if (port->kind == PORT_WEBSOCKET) {
+  if (port->kind == PORT_TYPE_WEBSOCKET) {
     // For websocket connections, wait until they are handshake finished.
     init_user_websocket(port->lws_context, fd);
     return;
   } else {
     // For other connections go straight to no handshake necessary, schedule to logon.
-    auto base = evconnlistener_get_base(listener);
+    auto *base = evconnlistener_get_base(listener);
 
-    auto user = new_user(port, fd, addr, addrlen);
+    auto *user = new_user(port, fd, addr, addrlen);
     new_user_event_listener(base, user);
 
-    if (user->connection_type == PORT_TELNET) {
+    if (user->connection_type == PORT_TYPE_TELNET) {
       user->telnet = net_telnet_init(user);
       send_initial_telnet_negotiations(user);
     }
 
     event_base_once(
         base, -1, EV_TIMEOUT,
-        [](evutil_socket_t fd, short what, void *arg) {
-          auto user = reinterpret_cast<interactive_t *>(arg);
+        [](evutil_socket_t /*fd*/, short /*what*/, void *arg) {
+          auto *user = reinterpret_cast<interactive_t *>(arg);
           on_user_logon(user);
         },
         (void *)user, nullptr);
@@ -232,7 +223,7 @@ interactive_t *new_user(port_def_t *port, evutil_socket_t fd, sockaddr *addr,
   /*
    * initialize new user interactive data structure.
    */
-  auto user = user_add();
+  auto *user = user_add();
 
   user->connection_type = port->kind;
   user->ob = master_ob;
@@ -248,7 +239,7 @@ interactive_t *new_user(port_def_t *port, evutil_socket_t fd, sockaddr *addr,
   }
 
   // Command handler
-  auto base = evconnlistener_get_base(port->ev_conn);
+  auto *base = evconnlistener_get_base(port->ev_conn);
   user->ev_command = evtimer_new(base, on_user_command, user);
 
   return user;
@@ -395,7 +386,7 @@ bool init_user_conn() {
     {
       if (!port.tls_cert.empty() && !port.tls_key.empty()) {
         debug_message("Processing TLS config for port %d...\n", port.port);
-        fs::path mudlib_path(CONFIG_STR(__MUD_LIB_DIR__));
+        auto mudlib_path = fs::u8path(CONFIG_STR(__MUD_LIB_DIR__));
         auto real_cert_path = mudlib_path / port.tls_cert;
         auto real_key_path = mudlib_path / port.tls_key;
         try {
@@ -428,7 +419,9 @@ bool init_user_conn() {
       struct addrinfo hints = {0};
 #ifdef IPV6
       hints.ai_family = AF_INET6;
+#ifdef AI_V4MAPPED
       hints.ai_flags |= AI_V4MAPPED;
+#endif
 #else
       hints.ai_family = AF_INET;
 #endif
@@ -437,7 +430,7 @@ bool init_user_conn() {
 
       int ret;
 
-      auto mudip = CONFIG_STR(__MUD_IP__);
+      auto *mudip = CONFIG_STR(__MUD_IP__);
       if (mudip != nullptr && strlen(mudip) > 0) {
         ret = evutil_getaddrinfo(mudip, service, &hints, &res);
       } else {
@@ -457,7 +450,7 @@ bool init_user_conn() {
       }
 
       // Websocket TLS is handled in init_websocket_context
-      if (!port.tls_cert.empty() && port.kind != PORT_WEBSOCKET) {
+      if (!port.tls_cert.empty() && port.kind != PORT_TYPE_WEBSOCKET) {
         SSL_CTX *ctx = tls_server_init(port.tls_cert, port.tls_key);
         if (!ctx) {
           debug_message("Unable to create TLS context.\n");
@@ -474,7 +467,7 @@ bool init_user_conn() {
     }
 
     // Listen on connection event
-    auto conn = evconnlistener_new(
+    auto *conn = evconnlistener_new(
         g_event_base, new_conn_handler, &port,
         LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_FREE | LEV_OPT_CLOSE_ON_EXEC, 1024, fd);
     if (conn == nullptr) {
@@ -483,7 +476,7 @@ bool init_user_conn() {
     }
     port.ev_conn = conn;
     port.fd = fd;
-    if (port.kind == PORT_WEBSOCKET) {
+    if (port.kind == PORT_TYPE_WEBSOCKET) {
       port.lws_context = init_websocket_context(g_event_base, &port);
     }
   }
@@ -569,18 +562,18 @@ void add_message(object_t *who, const char *data, int len) {
 
   auto *ip = who->interactive;
   switch (ip->connection_type) {
-    case PORT_ASCII:
-    case PORT_TELNET: {
+    case PORT_TYPE_ASCII:
+    case PORT_TYPE_TELNET: {
       auto transdata = u8_convert_encoding(ip->trans, data, len);
       auto result = transdata.empty() ? std::string_view(data, len) : transdata;
       inet_volume += result.size();
-      if (ip->connection_type == PORT_TELNET) {
+      if (ip->connection_type == PORT_TYPE_TELNET) {
         telnet_send_text(ip->telnet, result.data(), result.size());
       } else {
         bufferevent_write(ip->ev_buffer, result.data(), result.size());
       }
     } break;
-    case PORT_WEBSOCKET: {
+    case PORT_TYPE_WEBSOCKET: {
       if (ip->iflags & HANDSHAKE_COMPLETE) {
         websocket_send_text(ip->lws, data, len);
       } else {
@@ -625,7 +618,7 @@ void add_vmessage(object_t *who, const char *format, ...) {
     if (result <= sizeof(buf)) {
       add_message(who, buf, result);
     } else {
-      std::unique_ptr<char[]> msg(new char[result + 1]);
+      std::unique_ptr<char[]> const msg(new char[result + 1]);
       result = vsnprintf(msg.get(), result + 1, format, args2);
       if (result < 0) break;
       add_message(who, msg.get(), result);
@@ -656,13 +649,27 @@ int flush_message(interactive_t *ip) {
     // For socket based bufferevent, bufferevent_flush is actually a no-op, thus we have to
     // implement our own.
     if (ip->ssl) {
-      // TODO: implement this
+      auto *ssl = bufferevent_openssl_get_ssl(ip->ev_buffer);
+      auto *output = bufferevent_get_output(ip->ev_buffer);
+      auto len = evbuffer_get_length(output);
+      if (len > 0) {
+        evbuffer_freeze(output, 1);
+        auto *data = evbuffer_pullup(output, len);
+        auto wrote = SSL_write(ssl, data, len);
+        // must left unfreezed
+        // https://github.com/libevent/libevent/issues/1469
+        evbuffer_unfreeze(output, 1);
+        if (wrote > 0) {
+          evbuffer_drain(output, wrote);
+        }
+        return wrote > 0;
+      }
     } else {
       auto fd = bufferevent_getfd(ip->ev_buffer);
       if (fd == -1) {
         return 0;
       }
-      auto output = bufferevent_get_output(ip->ev_buffer);
+      auto *output = bufferevent_get_output(ip->ev_buffer);
       auto total = evbuffer_get_length(output);
       if (total > 0) {
         evbuffer_unfreeze(output, 1);
@@ -694,10 +701,10 @@ void get_user_data(interactive_t *ip) {
 
   /* compute how much data we can read right now */
   switch (ip->connection_type) {
-    case PORT_WEBSOCKET:
+    case PORT_TYPE_WEBSOCKET:
       // Impossible, we don't handle it here.
       break;
-    case PORT_TELNET:
+    case PORT_TYPE_TELNET:
       text_space = sizeof(ip->text) - ip->text_end;
 
       /* check if we need more space */
@@ -716,7 +723,7 @@ void get_user_data(interactive_t *ip) {
       }
       break;
 
-    case PORT_MUD:
+    case PORT_TYPE_MUD:
       if (ip->text_end < 4) {
         text_space = 4 - ip->text_end;
       } else {
@@ -752,11 +759,11 @@ void get_user_data(interactive_t *ip) {
   /* process the data that we've just read */
 
   switch (ip->connection_type) {
-    case PORT_WEBSOCKET:
+    case PORT_TYPE_WEBSOCKET:
       // Impossible, we don't handle it here
       break;
-    case PORT_TELNET: {
-      int start = ip->text_end;
+    case PORT_TYPE_TELNET: {
+      int const start = ip->text_end;
 
       // this will read data into ip->text
       telnet_recv(ip->telnet, reinterpret_cast<const char *>(&buf[0]), num_bytes);
@@ -779,7 +786,7 @@ void get_user_data(interactive_t *ip) {
       }
       break;
     }
-    case PORT_MUD:
+    case PORT_TYPE_MUD:
       memcpy(ip->text + ip->text_end, buf, num_bytes);
       ip->text_end += num_bytes;
 
@@ -806,7 +813,7 @@ void get_user_data(interactive_t *ip) {
       }
       break;
 
-    case PORT_ASCII: {
+    case PORT_TYPE_ASCII: {
       char *nl, *p;
 
       memcpy(ip->text + ip->text_end, buf, num_bytes);
@@ -840,7 +847,7 @@ void get_user_data(interactive_t *ip) {
       }
     } break;
 
-    case PORT_BINARY: {
+    case PORT_TYPE_BINARY: {
       buffer_t *buffer;
 
       buffer = allocate_buffer(num_bytes);
@@ -1055,7 +1062,7 @@ static char *get_user_command(interactive_t *ip) {
   return user_command;
 } /* get_user_command() */
 
-static int escape_command(interactive_t *ip, char *user_command) {
+static int escape_command(interactive_t *ip, const char *user_command) {
   if (user_command[0] != '!') {
     return 0;
   }
@@ -1076,7 +1083,7 @@ static void process_input(interactive_t *ip, char *user_command) {
   svalue_t *ret;
 
   if (!(ip->iflags & HAS_PROCESS_INPUT)) {
-    parse_command(user_command, command_giver);
+    safe_parse_command(user_command, command_giver);
     return;
   }
 
@@ -1086,24 +1093,24 @@ static void process_input(interactive_t *ip, char *user_command) {
    * programming languages.
    */
   copy_and_push_string(user_command);
-  ret = apply(APPLY_PROCESS_INPUT, command_giver, 1, ORIGIN_DRIVER);
+  ret = safe_apply(APPLY_PROCESS_INPUT, command_giver, 1, ORIGIN_DRIVER);
   if (!IP_VALID(ip, command_giver)) {
     return;
   }
   if (!ret) {
     ip->iflags &= ~HAS_PROCESS_INPUT;
-    parse_command(user_command, command_giver);
+    safe_parse_command(user_command, command_giver);
     return;
   }
 
 #ifndef NO_ADD_ACTION
   if (ret->type == T_STRING) {
-    auto command = string_copy(ret->u.string, "current_command: " __CURRENT_FILE_LINE__);
+    auto *command = string_copy(ret->u.string, "current_command: " __CURRENT_FILE_LINE__);
     DEFER { FREE_MSTR(command); };
-    parse_command(command, command_giver);
+    safe_parse_command(command, command_giver);
   } else {
     if (ret->type != T_NUMBER || !ret->u.number) {
-      parse_command(user_command, command_giver);
+      safe_parse_command(user_command, command_giver);
     }
   }
 #endif
@@ -1318,7 +1325,6 @@ void remove_interactive(object_t *ob, int dested) {
   FREE(ip);
   ob->interactive = nullptr;
   free_object(&ob, "remove_interactive");
-  return;
 } /* remove_interactive() */
 
 #if defined(F_INPUT_TO) || defined(F_GET_CHAR)
@@ -1380,9 +1386,13 @@ static int call_function_interactive(interactive_t *i, char *str) {
       sp->u.fp = funp = sent->function.f;
       funp->hdr.ref++;
     } else {
+      function = sent->function.s;
+      if (function && function[0] == APPLY___INIT_SPECIAL_CHAR) {
+        return 0;
+      }
       sp->type = T_STRING;
       sp->subtype = STRING_SHARED;
-      sp->u.string = function = sent->function.s;
+      sp->u.string = function;
       ref_string(function);
     }
 
@@ -1416,9 +1426,6 @@ static int call_function_interactive(interactive_t *i, char *str) {
     }
     /* current_object no longer set */
     if (function) {
-      if (function[0] == APPLY___INIT_SPECIAL_CHAR) {
-        error("Illegal function name.\n");
-      }
       (void)safe_apply(function, ob, num_arg + 1, ORIGIN_INTERNAL);
     } else {
       safe_call_function_pointer(funp, num_arg + 1);
@@ -1449,7 +1456,7 @@ int set_call(object_t *ob, sentence_t *sent, int flags) {
   if (ob == nullptr || sent == nullptr) {
     return (0);
   }
-  auto ip = ob->interactive;
+  auto *ip = ob->interactive;
   if (ip == nullptr || ip->input_to) {
     return (0);
   }
@@ -1605,7 +1612,7 @@ object_t *query_snooping(object_t *ob) {
   if (!(ob->flags & O_SNOOP)) {
     return nullptr;
   }
-  for (auto &user : users()) {
+  for (const auto &user : users()) {
     if (user->snooped_by == ob) {
       return user->ob;
     }
@@ -1626,8 +1633,8 @@ const char *sockaddr_to_string(const sockaddr *addr, socklen_t len) {
   static char result[NI_MAXHOST + NI_MAXSERV];
 
   char host[NI_MAXHOST], service[NI_MAXSERV];
-  int ret = getnameinfo(addr, len, host, sizeof(host), service, sizeof(service),
-                        NI_NUMERICHOST | NI_NUMERICSERV);
+  int const ret = getnameinfo(addr, len, host, sizeof(host), service, sizeof(service),
+                              NI_NUMERICHOST | NI_NUMERICSERV);
 
   if (ret) {
     debug(sockets, "sockaddr_to_string fail: %s.\n", evutil_gai_strerror(ret));

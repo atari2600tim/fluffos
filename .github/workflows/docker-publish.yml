@@ -11,7 +11,11 @@ on:
     tags: [ 'v*.*' ]
     paths-ignore:
       - 'docs/**'
-
+  pull_request:
+    branches:
+      - master
+    paths-ignore:
+      - 'docs/**'
 env:
   # Use docker.io for Docker Hub if empty
   REGISTRY: ghcr.io
@@ -29,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       # Login against a Docker registry except on PR
       # https://github.com/docker/login-action

@@ -21,45 +21,30 @@ TEST(iterator_test, counting_iterator) {
   EXPECT_EQ((it + 41).count(), 42);
 }
 
-TEST(iterator_test, truncating_iterator) {
-  char* p = nullptr;
-  auto it = fmt::detail::truncating_iterator<char*>(p, 3);
-  auto prev = it++;
-  EXPECT_EQ(prev.base(), p);
-  EXPECT_EQ(it.base(), p + 1);
-}
-
-TEST(iterator_test, truncating_iterator_default_construct) {
-  auto it = fmt::detail::truncating_iterator<char*>();
-  EXPECT_EQ(nullptr, it.base());
-  EXPECT_EQ(std::size_t{0}, it.count());
-}
-
-#ifdef __cpp_lib_ranges
-TEST(iterator_test, truncating_iterator_is_output_iterator) {
-  static_assert(
-      std::output_iterator<fmt::detail::truncating_iterator<char*>, char>);
-}
-#endif
-
-TEST(iterator_test, truncating_back_inserter) {
-  auto buffer = std::string();
-  auto bi = std::back_inserter(buffer);
-  auto it = fmt::detail::truncating_iterator<decltype(bi)>(bi, 2);
-  *it++ = '4';
-  *it++ = '2';
-  *it++ = '1';
-  EXPECT_EQ(buffer.size(), 2);
-  EXPECT_EQ(buffer, "42");
-}
-
 TEST(compile_test, compile_fallback) {
   // FMT_COMPILE should fallback on runtime formatting when `if constexpr` is
   // not available.
   EXPECT_EQ("42", fmt::format(FMT_COMPILE("{}"), 42));
 }
 
-#ifdef __cpp_if_constexpr
+struct type_with_get {
+  template <int> friend void get(type_with_get);
+};
+
+FMT_BEGIN_NAMESPACE
+template <> struct formatter<type_with_get> : formatter<int> {
+  template <typename FormatContext>
+  auto format(type_with_get, FormatContext& ctx) -> decltype(ctx.out()) {
+    return formatter<int>::format(42, ctx);
+  }
+};
+FMT_END_NAMESPACE
+
+TEST(compile_test, compile_type_with_get) {
+  EXPECT_EQ("42", fmt::format(FMT_COMPILE("{}"), type_with_get()));
+}
+
+#if defined(__cpp_if_constexpr) && defined(__cpp_return_type_deduction)
 struct test_formattable {};
 
 FMT_BEGIN_NAMESPACE
@@ -170,7 +155,7 @@ TEST(compile_test, named) {
   EXPECT_THROW(fmt::format(FMT_COMPILE("{invalid}"), fmt::arg("valid", 42)),
                fmt::format_error);
 
-#  if FMT_USE_NONTYPE_TEMPLATE_PARAMETERS
+#  if FMT_USE_NONTYPE_TEMPLATE_ARGS
   using namespace fmt::literals;
   auto statically_named_field_compiled =
       fmt::detail::compile<decltype("arg"_a = 42)>(FMT_COMPILE("{arg}"));
@@ -182,6 +167,11 @@ TEST(compile_test, named) {
   EXPECT_EQ("41 43",
             fmt::format(FMT_COMPILE("{a1} {a0}"), "a0"_a = 43, "a1"_a = 41));
 #  endif
+}
+
+TEST(compile_test, join) {
+  unsigned char data[] = {0x1, 0x2, 0xaf};
+  EXPECT_EQ("0102af", fmt::format(FMT_COMPILE("{:02x}"), fmt::join(data, "")));
 }
 
 TEST(compile_test, format_to) {
@@ -205,10 +195,12 @@ TEST(compile_test, format_to_n) {
   EXPECT_STREQ("2a", buffer);
 }
 
-TEST(compile_test, formatted_size) {
-  EXPECT_EQ(2, fmt::formatted_size(FMT_COMPILE("{0}"), 42));
-  EXPECT_EQ(5, fmt::formatted_size(FMT_COMPILE("{0:<4.2f}"), 42.0));
+#  ifdef __cpp_lib_bit_cast
+TEST(compile_test, constexpr_formatted_size) {
+  FMT_CONSTEXPR20 size_t size = fmt::formatted_size(FMT_COMPILE("{}"), 42);
+  EXPECT_EQ(size, 2);
 }
+#  endif
 
 TEST(compile_test, text_and_arg) {
   EXPECT_EQ(">>>42<<<", fmt::format(FMT_COMPILE(">>>{}<<<"), 42));
@@ -263,7 +255,7 @@ TEST(compile_test, print) {
 }
 #endif
 
-#if FMT_USE_NONTYPE_TEMPLATE_PARAMETERS
+#if FMT_USE_NONTYPE_TEMPLATE_ARGS
 TEST(compile_test, compile_format_string_literal) {
   using namespace fmt::literals;
   EXPECT_EQ("", fmt::format(""_cf));
@@ -272,8 +264,16 @@ TEST(compile_test, compile_format_string_literal) {
 }
 #endif
 
-#if __cplusplus >= 202002L || \
-    (__cplusplus >= 201709L && FMT_GCC_VERSION >= 1002)
+// MSVS 2019 19.29.30145.0 - Support C++20 and OK.
+// MSVS 2022 19.32.31332.0 - compile-test.cc(362,3): fatal error C1001: Internal
+// compiler error.
+//  (compiler file
+//  'D:\a\_work\1\s\src\vctools\Compiler\CxxFE\sl\p1\c\constexpr\constexpr.cpp',
+//  line 8635)
+#if ((FMT_CPLUSPLUS >= 202002L) &&                           \
+     (!defined(_GLIBCXX_RELEASE) || _GLIBCXX_RELEASE > 9) && \
+     (!FMT_MSC_VERSION || FMT_MSC_VERSION < 1930)) ||        \
+    (FMT_CPLUSPLUS >= 201709L && FMT_GCC_VERSION >= 1002)
 template <size_t max_string_length, typename Char = char> struct test_string {
   template <typename T> constexpr bool operator==(const T& rhs) const noexcept {
     return fmt::basic_string_view<Char>(rhs).compare(buffer) == 0;

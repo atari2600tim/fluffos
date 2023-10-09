@@ -4,9 +4,9 @@
 
 #include <cstdlib>  // for qsort
 #include <cstdio>   // for sprintf
-#include <cctype>   // for isspace
 
-#include "base/internal/tracing.h"
+#include <fmt/format.h>
+
 #include "efuns.autogen.h"          // FIXME
 #include "applies_table.autogen.h"  // FIXME:
 
@@ -16,7 +16,6 @@
 #include "icode.h"
 #include "lex.h"
 #include "scratchpad.h"
-#include "keyword.h"
 #include "symbol.h"
 #include <string>
 
@@ -43,7 +42,7 @@ extern object_t *simul_efun_ob;
 extern svalue_t *safe_apply_master_ob(int, int);
 
 static void clean_parser(void);
-static void prolog(int /*f*/, char * /*name*/);
+static void prolog(std::unique_ptr<LexStream>, char * /*name*/);
 static program_t *epilog(void);
 static void show_overload_warnings(void);
 
@@ -1426,7 +1425,16 @@ short store_prog_string(const char *str) {
   char **p;
   unsigned char hash, mask, *tagp;
 
-  str = make_shared_string(str);
+  const auto *origin_str = str;
+
+  bool is_new_string = false;
+  str = findstring(origin_str);
+
+  if (!str) {
+    str = make_shared_string(origin_str);
+    is_new_string = true;
+  }
+
   STRING_HASH(hash, str);
   idxp = &string_idx[hash];
 
@@ -1441,7 +1449,6 @@ short store_prog_string(const char *str) {
     /* search hash chain to see if it's there */
     for (i = *idxp; i >= 0; i = next_tab[i]) {
       if (p[i] == str) {
-        free_string(str); /* needed as string is only free'ed once. */
         (reinterpret_cast<short *>(mem_block[A_STRING_REFS].block))[i]++;
         return i;
       }
@@ -1480,6 +1487,9 @@ short store_prog_string(const char *str) {
     i = mem_block[A_STRINGS].current_size / sizeof str - 1;
   }
   PROG_STRING(i) = str;
+  if (!is_new_string) {
+    ref_string(str);
+  }
   (reinterpret_cast<short *>(mem_block[A_STRING_NEXT].block))[i] = next;
   (reinterpret_cast<short *>(mem_block[A_STRING_REFS].block))[i] = 1;
   *idxp = i;
@@ -1980,7 +1990,7 @@ void yywarn(const char *fmt, ...) {
 /*
  * Compile an LPC file.
  */
-program_t *compile_file(int f, char *name) {
+program_t *compile_file(std::unique_ptr<LexStream> stream, char *name) {
   int yyparse(void);
   static int guard = 0;
   program_t *prog;
@@ -1996,8 +2006,12 @@ program_t *compile_file(int f, char *name) {
   guard = 1;
 
   {
+    // make sure we use the C locale during parsing
+    auto *current_locale = setlocale(LC_ALL, "C");
+    DEFER { setlocale(LC_ALL, current_locale); };
+
     symbol_start(name);
-    prolog(f, name);
+    prolog(std::move(stream), name);
     func_present = 0;
     yyparse();
     symbol_end();
@@ -2446,7 +2460,7 @@ static program_t *epilog(void) {
 /*
  * Initialize the environment that the compiler needs.
  */
-static void prolog(int f, char *name) {
+static void prolog(std::unique_ptr<LexStream> stream, char *name) {
   int i;
 
   function_context.num_parameters = -1;
@@ -2487,7 +2501,7 @@ static void prolog(int f, char *name) {
     copy_structures(simul_efun_ob->prog);
   }
 
-  start_new_file(f);
+  start_new_file(std::move(stream));
 }
 
 /*
@@ -2734,42 +2748,13 @@ char *allocate_in_mem_block(int n, int size) {
  * message somewhere.
  */
 void smart_log(const char *error_file, int line, const char *what, int flag) {
-  char *buff;
-  svalue_t *mret;
-  extern int pragmas;
-
-  buff = reinterpret_cast<char *>(
-      DMALLOC(strlen(error_file) + strlen(what) + ((pragmas & PRAGMA_ERROR_CONTEXT) ? 100 : 40),
-              TAG_TEMPORARY, "smart_log: 1"));
-
-  if (flag) {
-    sprintf(buff, "/%s line %d: Warning: %s", error_file, line, what);
-  } else {
-    sprintf(buff, "/%s line %d: %s", error_file, line, what);
+  auto logs = prepare_logs(error_file, line, what, flag, pragmas & PRAGMA_ERROR_CONTEXT);
+  for (auto &log : logs) {
+    debug_message("%s", log.c_str());
   }
 
-  if (pragmas & PRAGMA_ERROR_CONTEXT) {
-    char *ls = strrchr(buff, '\n');
-    unsigned char *tmp;
-    if (ls) {
-      tmp = reinterpret_cast<unsigned char *>(ls) + 1;
-      while (*tmp && isspace(*tmp)) {
-        tmp++;
-      }
-      if (!*tmp) {
-        *ls = 0;
-      }
-    }
-    strcat(buff, show_error_context());
-  } else {
-    strcat(buff, "\n");
-  }
-
+  auto res = fmt::to_string(fmt::join(logs, ""));
   push_malloced_string(add_slash(error_file));
-  copy_and_push_string(buff);
-  mret = safe_apply_master_ob(APPLY_LOG_ERROR, 2);
-  if (!mret || mret == (svalue_t *)-1) {
-    debug_message("%s", buff);
-  }
-  FREE(buff);
+  copy_and_push_string(res.c_str());
+  safe_apply_master_ob(APPLY_LOG_ERROR, 2);
 } /* smart_log() */

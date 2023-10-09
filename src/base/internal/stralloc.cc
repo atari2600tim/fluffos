@@ -72,7 +72,7 @@ uint64_t num_str_searches = 0;
 
 #define StrHash(s) (whashstr((s)) & (htable_size_minus_one))
 
-#define hfindblock(s, h) sfindblock(s, h = StrHash(s))
+#define hfindblock(s, h) sfindblock(s, (h) = StrHash(s))
 #define findblock(s) sfindblock(s, StrHash(s))
 
 static block_t *sfindblock(const char * /*s*/, int /*h*/);
@@ -146,9 +146,8 @@ const char *findstring(const char *s) {
 
   if ((b = findblock(s))) {
     return STRING(b);
-  } else {
-    return (nullptr);
   }
+  return (nullptr);
 }
 
 /* alloc_new_string: Make a space for a string.  */
@@ -175,6 +174,7 @@ static block_t *alloc_new_shared_string(const char *string, int h, const char *w
   }
   SIZE(b) = (len > UINT_MAX ? UINT_MAX : len);
   REFS(b) = 1;
+  md_record_ref_journal(PTR_TO_NODET(b), true, b->refs, "alloc_new_shared_string: " + std::string(why));
   NEXT(b) = base_table[h];
   HASH(b) = h;
   base_table[h] = b;
@@ -193,6 +193,7 @@ const char *int_make_shared_string(const char *str, const char *desc) {
   } else {
     if (REFS(b)) {
       REFS(b)++;
+      md_record_ref_journal(PTR_TO_NODET(b), true, b->refs, "int_make_shared_string: " + std::string(desc));
     }
     ADD_STRING(SIZE(b));
   }
@@ -204,7 +205,7 @@ const char *int_make_shared_string(const char *str, const char *desc) {
    ref_string: Fatal to call this function on a string that isn't shared.
 */
 
-const char *ref_string(const char *str) {
+const char *int_ref_string(const char *str, const char *desc) {
   block_t *b;
 
   b = BLOCK(str);
@@ -212,6 +213,7 @@ const char *ref_string(const char *str) {
                str);
   if (REFS(b)) {
     REFS(b)++;
+    md_record_ref_journal(PTR_TO_NODET(b), true, b->refs, "ref_string: " + std::string(desc));
   }
   NDBG(b);
   ADD_STRING(SIZE(b));
@@ -224,7 +226,7 @@ const char *ref_string(const char *str) {
  * checks applied.
  */
 
-void free_string(const char *str) {
+void int_free_string(const char *str, const char *desc) {
   block_t **prev, *b;
   int h;
 
@@ -241,6 +243,7 @@ void free_string(const char *str) {
   }
 
   REFS(b)--;
+  md_record_ref_journal(PTR_TO_NODET(b), false, b->refs, "free_string: " + std::string(desc));
   SUB_STRING(SIZE(b));
 
   NDBG(b);
@@ -358,7 +361,7 @@ char *int_new_string(unsigned int size)
 
 char *extend_string(const char *str, int len) {
   malloc_block_t *mbt;
-  int oldsize = MSTR_SIZE(str);
+  int const oldsize = MSTR_SIZE(str);
 
   mbt = reinterpret_cast<malloc_block_t *>(DREALLOC(
       MSTR_BLOCK(str), len + sizeof(malloc_block_t) + 1, TAG_MALLOC_STRING, "extend_string"));
@@ -424,7 +427,7 @@ char *int_string_unlink(const char *str)
   mbt->ref--;
 
   if (mbt->size == USHRT_MAX) {
-    int l = strlen(str + USHRT_MAX) + USHRT_MAX; /* ouch */
+    int const l = strlen(str + USHRT_MAX) + USHRT_MAX; /* ouch */
 
     newmbt = reinterpret_cast<malloc_block_t *>(
         DMALLOC(l + sizeof(malloc_block_t) + 1, TAG_MALLOC_STRING, desc));
@@ -444,6 +447,16 @@ char *int_string_unlink(const char *str)
   return reinterpret_cast<char *>(newmbt + 1);
 }
 
+void stralloc_print_entry(std::stringstream &ss, block_t* entry) {
+#if defined(DEBUGMALLOC) && defined(DEBUGMALLOC_EXTENSIONS)
+  auto *md_entry = PTR_TO_NODET(entry);
+  ss << fmt::format(FMT_STRING("{:d},{:d},{:s},{:s},"), md_entry->id, md_entry->size,
+                    md_entry->tag == TAG_SHARED_STRING ? "S" : "M", md_entry->desc);
+#endif
+  ss << fmt::format(FMT_STRING("{:d},{:x},{:d},{:.40s}\n"), entry->refs, entry->hash,
+                    entry->size, STRING(entry));
+}
+
 void dump_stralloc(outbuffer_t *out) {
   std::stringstream ss;
 
@@ -451,13 +464,7 @@ void dump_stralloc(outbuffer_t *out) {
   // can't direct output to outbuf since it might realloc
   for (int hsh = 0; hsh < htable_size; hsh++) {
     for (block_t *entry = base_table[hsh]; entry; entry = entry->next) {
-#if defined(DEBUGMALLOC) && defined(DEBUGMALLOC_EXTENSIONS)
-      auto md_entry = PTR_TO_NODET(entry);
-      ss << fmt::format(FMT_STRING("{:d},{:d},{:s},{:.40s}"), md_entry->id, md_entry->size,
-                        md_entry->tag == TAG_SHARED_STRING ? "S" : "M", md_entry->desc);
-#endif
-      ss << fmt::format(FMT_STRING("{:d},{:x},{:d},{:.40s}\n"), entry->refs, entry->hash,
-                        entry->size, STRING(entry));
+      stralloc_print_entry(ss, entry);
     }
   }
   auto res = ss.str();

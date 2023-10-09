@@ -341,6 +341,7 @@ void start_request_term_type();
 void request_term_size(void | int);
 void telnet_nop();
 void telnet_ga();
+void telnet_msp_oob(string);
 
 /* shutdown is at the end because it is only called once per boot cycle :) */
 void shutdown(void | int);
@@ -354,5 +355,10 @@ void trace_start(string, int default: 10);
 // stop to collect tracing data right away.
 void trace_end();
 
-// return highest resolution clock in nanoseconds
+// return highest resolution clock in platform dependent unit
 int perf_counter_ns();
+// Return nanosecond time
+int time_ns();
+
+mixed *sys_network_ports();
+void sys_reload_tls(int);

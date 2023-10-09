@@ -49,7 +49,7 @@ static char *hexdump(const unsigned char *data, int len) {
   return result;
 }
 
-void f_hash(void) {
+void f_hash() {
   const char *algo, *data;
   char *result = nullptr;
   int data_len;
@@ -102,7 +102,7 @@ void f_hash(void) {
 
 result:
   if (!result) {
-    error("hash() unknown hash type: %s", algo);
+    error("hash() unknown hash type: %s\n", algo);
   }
 
   /* Pop the arguments off the stack and push the result */

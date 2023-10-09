@@ -5,7 +5,7 @@ title: interactive / telnet_ga
 
 ### NAME
 
-    telnet_nop() - send an TELNET GA message
+    telnet_ga() - send an TELNET GA message
 
 ### SYNOPSIS
 
@@ -15,8 +15,3 @@ title: interactive / telnet_ga
 
     if user is under telnet, then send an TELNET_IAC TELNET_GA sequence,
     useful for prompts that don't terminate with a newline character.
-
-### SEE ALSO
-
-    N/A
-

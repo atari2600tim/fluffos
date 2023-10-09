@@ -620,60 +620,80 @@ void f_range(int code) {
   switch (sp->type) {
     case T_STRING: {
       int32_t from, to;
+      int32_t const len = SVALUE_STRLEN(sp);
 
-      EGCSmartIterator iter(sp->u.string, SVALUE_STRLEN(sp));
+      EGCSmartIterator iter(sp->u.string, len);
       if (!iter.ok()) {
         error("Invalid UTF-8 string: f_range");
       }
 
-      to = (--sp)->u.number;
-      from = (--sp)->u.number;
+      to = (sp - 1)->u.number;
+      from = (sp - 2)->u.number;
 
-      if (!CONFIG_INT(__RC_OLD_RANGE_BEHAVIOR__)) {
-        if (code & 0x01) {
-          to = -1 * to;
+      if (CONFIG_INT(__RC_OLD_RANGE_BEHAVIOR__)) {
+        if (to < 0 && !(code & 0x01)) {
+          code |= 0x01;
+          to = to * -1;
         }
-        if (code & 0x10) {
-          from = -1 * from;
-        }
-      } else {
-        if (code & 0x01) {
-          to = -1 * to;
-        }
-        if (code & 0x10) {
-          from = -1 * from;
+        if (from < 0 && !(code & 0x10)) {
+          code |= 0x10;
+          from = from * -1;
         }
       }
 
-      if ((from > 0 && to > 0 && to < from) || (from < 0 && to < 0 && to < from)) {
-        free_string_svalue(sp + 2);
-        sp->type = T_STRING;
-        sp->subtype = STRING_CONSTANT;
-        sp->u.string = "";
+      // Notes:
+      // ranges with indexes which are out of bounds do not give an error.
+      // Instead if a maximal subrange can be found within the range requested
+      // that lies within the bounds of the indexed value, it will be used.
+      if (code & 0x01) {
+        if (to <= 0) {
+          to = len;
+        } else {
+          to = iter.post_index_to_offset(-1 * to);
+        }
+      } else {
+        if (to < 0) {
+          to = -1;
+        } else {
+          auto pos = iter.post_index_to_offset(to);
+          if (pos > 0) {
+            to = pos;
+          } else if (pos == -1 && to >= iter.count()) {
+            to = len;
+          } else {
+            to = -1;
+          }
+        }
+      }
+
+      if (code & 0x10) {
+        if (from <= 0) {
+          from = len;
+        } else {
+          from = iter.index_to_offset(-1 * from);
+          if (from < 0) from = 0;
+        }
+      } else {
+        if (from < 0) {
+          from = 0;
+        } else {
+          from = iter.index_to_offset(from);
+        }
+      }
+
+      if ((from < 0 || to < 0) /* invalid range */
+          || (to < from)       /* empty range */
+      ) {
+        pop_3_elems();
+        push_constant_string("");
         return;
       }
+      char *tmp = new_string(to - from, "f_range");
+      memcpy(tmp, iter.data() + from, to - from);
+      tmp[to - from] = '\0';
 
-      auto start = iter.index_to_offset(from);
-      if (start < 0) {
-        start = 0;
-      }
-      auto end = iter.post_index_to_offset(to);
-      if (end < 0) {
-        put_malloced_string(string_copy(iter.data() + start, "f_range"));
-      } else {
-        if (end < start) {
-          free_string_svalue(sp + 2);
-          sp->type = T_STRING;
-          sp->subtype = STRING_CONSTANT;
-          sp->u.string = "";
-          return;
-        }
-        char *tmp = new_string(end - start, "f_range");
-        memcpy(tmp, iter.data() + start, end - start);
-        tmp[end - start] = '\0';
-        put_malloced_string(tmp);
-      }
-      free_string_svalue(sp + 2);
+      pop_3_elems();
+      push_malloced_string(tmp);
       break;
     }
     case T_BUFFER: {
@@ -758,15 +778,24 @@ void f_extract_range(int code) {
         error("Invalid UTF-8 String: f_extract_range.");
       }
       from = (--sp)->u.number;
-      if (!CONFIG_INT(__RC_OLD_RANGE_BEHAVIOR__)) {
-        if (from < 0) {
-          from = 0;
+      if (CONFIG_INT(__RC_OLD_RANGE_BEHAVIOR__)) {
+        if (!code && from < 0) {
+          code = 1;
+          from = -1 * from;
         }
       }
+
+      int offset;
       if (code) {
-        from = -1 * from;
+        offset = from <= 0 ? -1 : iter.index_to_offset(-1 * from);
+      } else {
+        offset = from < 0 ? 0 : iter.index_to_offset(from);
       }
-      auto offset = iter.index_to_offset(from);
+      if (code && from > 0 && offset < 0) {
+        if (from > (int32_t)iter.count()) {
+          offset = 0;
+        }
+      }
       if (offset < 0) {
         sp->type = T_STRING;
         sp->subtype = STRING_CONSTANT;
@@ -932,19 +961,16 @@ void f_sub_eq() {
 #define SWITCH_CASE_SIZE (sizeof(LPC_INT) + sizeof(short))
 
 /* offsets from 'pc' */
-#define SW_TYPE 0
-#define SW_TABLE 1
-#define SW_ENDTAB 3
-#define SW_DEFAULT 5
+enum { SW_TYPE = 0, SW_TABLE = 1, SW_ENDTAB = 3, SW_DEFAULT = 5 };
 
 /* offsets used for range (L_ for lower member, U_ for upper member) */
-#define L_LOWER 0
+enum { L_LOWER = 0 };
 #define L_TYPE (sizeof(LPC_INT))
 #define L_UPPER (SWITCH_CASE_SIZE)
 #define L_ADDR (SWITCH_CASE_SIZE + sizeof(LPC_INT))
 #define U_LOWER (-SWITCH_CASE_SIZE)
 #define U_TYPE (-SWITCH_CASE_SIZE + sizeof(LPC_INT))
-#define U_UPPER 0
+enum { U_UPPER = 0 };
 #define U_ADDR (sizeof(LPC_INT))
 
 // FIXME: The variable naming scheme is horrible, need to
@@ -953,7 +979,7 @@ void f_switch() {
   unsigned short offset, end_off;
   LPC_INT i, d, s, r;
   char *l, *end_tab;
-  static unsigned short off_tab[] = {
+  static unsigned short const off_tab[] = {
       0 * SWITCH_CASE_SIZE,    1 * SWITCH_CASE_SIZE,    3 * SWITCH_CASE_SIZE,
       7 * SWITCH_CASE_SIZE,    15 * SWITCH_CASE_SIZE,   31 * SWITCH_CASE_SIZE,
       63 * SWITCH_CASE_SIZE,   127 * SWITCH_CASE_SIZE,  255 * SWITCH_CASE_SIZE,
@@ -1021,9 +1047,8 @@ void f_switch() {
       COPY_SHORT(&offset, pc + SW_DEFAULT);
       pc += offset;
       return;
-    } else {
-      fatal("unsupported switch table format.\n");
     }
+    fatal("unsupported switch table format.\n");
   }
   /*
    * l - current entry we are looking at.
@@ -1059,11 +1084,10 @@ void f_switch() {
         /* key not found, use default address */
         COPY_SHORT(&offset, pc + SW_DEFAULT);
         break;
-      } else {
-        /* d >= SWITCH_CASE_SIZE */
-        l -= d;
-        d >>= 1;
-      }
+      } /* d >= SWITCH_CASE_SIZE */
+      l -= d;
+      d >>= 1;
+
     } else if (s > r) {
       if (d < SWITCH_CASE_SIZE) {
         /* test if entry is part of a range */
@@ -1084,24 +1108,24 @@ void f_switch() {
         /* use default address */
         COPY_SHORT(&offset, pc + SW_DEFAULT);
         break;
-      } else { /* d >= SWITCH_CASE_SIZE */
-        l += d;
-        /* if table isn't a power of 2 in size, fix us up */
-        while (l >= end_tab) {
-          d >>= 1;
-          if (d < SWITCH_CASE_SIZE) {
-            d = 0;
-            break;
-          }
-          l -= d;
-        }
-        if (l == end_tab) {
-          /* use default address */
-          COPY_SHORT(&offset, pc + SW_DEFAULT);
+      } /* d >= SWITCH_CASE_SIZE */
+      l += d;
+      /* if table isn't a power of 2 in size, fix us up */
+      while (l >= end_tab) {
+        d >>= 1;
+        if (d < SWITCH_CASE_SIZE) {
+          d = 0;
           break;
         }
-        d >>= 1;
+        l -= d;
       }
+      if (l == end_tab) {
+        /* use default address */
+        COPY_SHORT(&offset, pc + SW_DEFAULT);
+        break;
+      }
+      d >>= 1;
+
     } else {
       /* s == r */
       COPY_SHORT(&offset, l + U_ADDR);
@@ -1195,7 +1219,7 @@ void f_function_constructor() {
   push_refed_funp(fp);
 }
 
-void f__evaluate(void) {
+void f__evaluate() {
   svalue_t *v;
   svalue_t *arg = sp - st_num_arg + 1;
 

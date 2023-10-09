@@ -10,14 +10,14 @@
 /*
  * The following is for internal use (ie driver) only
  */
-#define NUM_CONFIG_STRS (RC_LAST_CONFIG_STR - RC_BASE_CONFIG_STR)
-#define NUM_CONFIG_INTS (RC_LAST_CONFIG_INT - RC_BASE_CONFIG_INT)
+#define NUM_CONFIG_STRS (RC_LAST_CONFIG_STR - RC_BASE_CONFIG_STR + 1)
+#define NUM_CONFIG_INTS (RC_LAST_CONFIG_INT - RC_BASE_CONFIG_INT + 1)
 
 // How many external cmds are supported.
 constexpr int g_num_external_cmds = 100;
 extern char *external_cmd[g_num_external_cmds];
 
-void read_config(char *);
+void read_config(const char *);
 void print_rc_table();
 
 extern int config_int[NUM_CONFIG_INTS];
