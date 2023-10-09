@@ -415,12 +415,12 @@ static int user_parser(char *buff) {
       push_undefined();
     }
     if (s->flags & V_FUNCTION) {
-      ret = safe_call_function_pointer(s->function.f, 1);
+      ret = call_function_pointer(s->function.f, 1);
     } else {
       if (s->function.s[0] == APPLY___INIT_SPECIAL_CHAR) {
         error("Illegal function name.\n");
       }
-      ret = safe_apply(s->function.s, s->ob, 1, where);
+      ret = apply(s->function.s, s->ob, 1, where);
     }
     /* s may be dangling at this point */
 
@@ -488,7 +488,7 @@ void safe_parse_command(char *str, object_t *ob) {
 
   try {
     parse_command(str, ob);
-  } catch (char *) {
+  } catch (const char *) {
     restore_context(&econ);
   }
   pop_context(&econ);
