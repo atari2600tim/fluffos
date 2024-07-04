@@ -23,6 +23,7 @@
 #include "interactive.h"  // for interactive_t, FIXME
 #include "vm/internal/apply.h"
 #include "vm/internal/base/machine.h"
+#include "vm/internal/base/debug.h"
 #include "vm/internal/master.h"
 #include "vm/internal/otable.h"
 #include "vm/internal/simul_efun.h"
@@ -200,7 +201,7 @@ static int give_uid_to_object(object_t *ob) {
    * Now we are sure that we have a creator name. Do not call apply()
    * again, because creator_name will be lost !
    */
-  if (strcmp(current_object->uid->name, creator_name) == 0) {
+  if (current_object && strcmp(current_object->uid->name, creator_name) == 0) {
     /*
      * The loaded object has the same uid as the loader.
      */
@@ -1646,15 +1647,9 @@ void free_sentence(sentence_t *p) {
       vsnprintf(msg_buf, 2048, fmt, args);
       va_end(args);
       debug_message("******** FATAL ERROR: %s\n", msg_buf);
-#ifdef DEBUG
-      // make DEBUG driver directly crash, if there is debugger
-      // it will catch the problem and allow debugging.
-      break;
-#endif
       if (Tracer::enabled()) {
         Tracer::collect();
       }
-      debug_message("FluffOS driver attempting to exit gracefully.\n");
       if (current_file) {
         debug_message("(occurred during compilation of %s at line %d)\n", current_file,
                       current_line);
@@ -1662,8 +1657,15 @@ void free_sentence(sentence_t *p) {
       if (current_object) {
         debug_message("(current object was /%s)\n", current_object->obname);
       }
-
-      dump_trace(1);
+      if (current_prog) {
+        dump_vm_state();
+      }
+#ifdef DEBUG
+      // make DEBUG driver directly crash, if there is debugger
+      // it will catch the problem and allow debugging.
+      break;
+#endif
+      debug_message("FluffOS driver attempting to exit gracefully.\n");
 #ifdef PACKAGE_MUDLIB_STATS
       save_stat_files();
 #endif
@@ -1903,7 +1905,12 @@ void _error_handler(char *err) {
     }
     num_mudlib_error--;
     num_error++;
-  } else if (num_mudlib_error == 1) {
+  } else if (num_mudlib_error > 10) {
+    num_mudlib_error = 0;
+    // stop recurse errors
+    _error_handler(err);
+    goto exit;
+  } else {
     debug_message("Error in mudlib error handler: ");
     debug_message_with_location(err);
     dump_trace(CONFIG_INT(__RC_TRACE_CODE__));

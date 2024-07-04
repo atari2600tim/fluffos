@@ -42,8 +42,12 @@ void assign_svalue_no_free(svalue_t *to, svalue_t *from) {
   } else if (from->type & T_REFED) {
     if (from->type == T_OBJECT) {
       add_ref(from->u.ob, "assign_svalue_no_free");
+      md_record_ref_journal(PTR_TO_NODET(from->u.ob), true, from->u.ob->ref, __CURRENT_FILE_LINE__);
     } else {
       from->u.refed->ref++;
+      if (from->u.refed != (void *) &the_null_array && from->u.refed != (void *) &null_buf) {
+        md_record_ref_journal(PTR_TO_NODET(from->u.refed), true, from->u.refed->ref, __CURRENT_FILE_LINE__);
+      }
     }
   }
 }
@@ -113,6 +117,11 @@ void int_free_svalue(svalue_t *v)
     /* TODO: Set to 0 on condition that REF overflow to negative. */
     if (v->u.refed->ref > 0) {
       v->u.refed->ref--;
+#ifdef DEBUGMALLOC_EXTENSIONS
+      if (v->u.refed != (void *) &the_null_array && v->u.refed != (void *) &null_buf) {
+        md_record_ref_journal(PTR_TO_NODET(v->u.refed), false, v->u.refed->ref, tag);
+      }
+#endif // DEBUGMALLOC_EXTENSIONS
     }
     if (v->u.refed->ref == 0) {
       switch (v->type) {
@@ -166,7 +175,7 @@ void int_free_svalue(svalue_t *v)
 /*
  * Converts any LPC datatype into json format, only value types are supported.
  */
-constexpr int _max_depth = 10;
+constexpr int _max_depth = 256;
 json svalue_to_json_summary(const svalue_t *obj, int depth) {
   /* prevent an infinite recursion on self-referential structures */
   if (depth >= _max_depth) {

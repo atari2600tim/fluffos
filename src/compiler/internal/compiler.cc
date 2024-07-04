@@ -18,6 +18,7 @@
 #include "scratchpad.h"
 #include "symbol.h"
 #include <string>
+#include <utility>
 
 #include "vm/internal/base/machine.h"  // for error(), FIXME
 
@@ -42,7 +43,7 @@ extern object_t *simul_efun_ob;
 extern svalue_t *safe_apply_master_ob(int, int);
 
 static void clean_parser(void);
-static void prolog(std::unique_ptr<LexStream>, char * /*name*/);
+static void prolog(std::unique_ptr<LexStream>, const char * /*name*/);
 static program_t *epilog(void);
 static void show_overload_warnings(void);
 
@@ -210,24 +211,26 @@ void pop_n_locals(int num) {
   }
 }
 
-int add_local_name(const char *str, int type) {
+int add_local_name(const char *str, int type, parse_node_t* optional_default_arg_value) {
   auto max_local_variables = CFG_INT(__MAX_LOCAL_VARIABLES__);
 
   if (max_num_locals == max_local_variables) {
     yyerror("Too many local variables");
     return 0;
-  } else {
-    ident_hash_elem_t *ihe;
-    symbol_record(OP_SYMBOL_NEW, current_file, current_line, str);
-    ihe = find_or_add_ident(str, FOA_NEEDS_MALLOC);
-    type_of_locals_ptr[max_num_locals] = type;
-    locals_ptr[current_number_of_locals].ihe = ihe;
-    locals_ptr[current_number_of_locals++].runtime_index = max_num_locals;
-    if (ihe->dn.local_num == -1) {
-      ihe->sem_value++;
-    }
-    return ihe->dn.local_num = max_num_locals++;
   }
+
+  ident_hash_elem_t *ihe;
+  symbol_record(OP_SYMBOL_NEW, current_file, current_line, str);
+  ihe = find_or_add_ident(str, FOA_NEEDS_MALLOC);
+  type_of_locals_ptr[max_num_locals] = type;
+  auto idx = current_number_of_locals++;
+  locals_ptr[idx].ihe = ihe;
+  locals_ptr[idx].funcptr_default = optional_default_arg_value;
+  locals_ptr[idx].runtime_index = max_num_locals;
+  if (ihe->dn.local_num == -1) {
+    ihe->sem_value++;
+  }
+  return ihe->dn.local_num = max_num_locals++;
 }
 
 void reallocate_locals() {
@@ -754,8 +757,7 @@ int copy_functions(program_t *from, int typemod) {
   num_functions = from->num_functions_defined + from->last_inherited;
 
   if (from->num_functions_defined &&
-      (from->function_table[from->num_functions_defined - 1].funcname[0] ==
-       APPLY___INIT_SPECIAL_CHAR)) {
+      (strcmp(APPLY___INIT, from->function_table[from->num_functions_defined - 1].funcname)== 0)) {
     initializer = --num_functions;
   }
 
@@ -897,50 +899,41 @@ int compatible_types2(int t1, int t2) {
  * Note: this function is now only used for resolving :: references
  */
 static int find_matching_function(program_t *prog, const char *name, parse_node_t *node) {
-  int high = prog->num_functions_defined - 1;
-  int low = 0;
-  int i, res;
-
   /* Search our function table */
-  while (high >= low) {
-    int mid = (high + low) / 2;
-    const char *p = prog->function_table[mid].funcname;
+  for (int i = 0; i < prog->num_functions_defined; i++) {
+      // rely on the fact that name is a shared string, can simply compare pointers for equality
+      if(name == prog->function_table[i].funcname) {
+          int ri;
+          int flags;
+          int type;
 
-    if (name < p) {
-      high = mid - 1;
-    } else if (name > p) {
-      low = mid + 1;
-    } else {
-      int ri;
-      int flags;
-      int type;
+          /* Rely on the fact that functions in the table are not inherited
+             or aliased */
+          /* Non-inherited aliased ones are always removed anyway */
+          ri = prog->last_inherited + i;
 
-      /* Rely on the fact that functions in the table are not inherited
-         or aliased */
-      /* Non-inherited aliased ones are always removed anyway */
-      ri = prog->last_inherited + mid;
+          flags = prog->function_flags[ri];
 
-      flags = prog->function_flags[ri];
+          if (flags & (FUNC_UNDEFINED | FUNC_PROTOTYPE)) {
+              yywarn("BUG: inherit function is undefined or prototype, flags: %d", flags);
+              return 0;
+          }
+          if (flags & DECL_PRIVATE) {
+              return -1;
+          }
 
-      if (flags & (FUNC_UNDEFINED | FUNC_PROTOTYPE)) {
-        return 0;
+          node->kind = NODE_CALL_2;
+          node->v.number = F_CALL_INHERITED;
+          node->l.number = ri;
+          type = prog->function_table[i].type;
+          fix_class_type(&type, prog);
+          node->type = type;
+          return 1;
       }
-      if (flags & DECL_PRIVATE) {
-        return -1;
-      }
-
-      node->kind = NODE_CALL_2;
-      node->v.number = F_CALL_INHERITED;
-      node->l.number = ri;
-      type = prog->function_table[mid].type;
-      fix_class_type(&type, prog);
-      node->type = type;
-      return 1;
-    }
   }
-
   /* Search inherited function tables */
-  i = prog->num_inherited;
+  int res;
+  int i = prog->num_inherited;
   while (i--) {
     if ((res = find_matching_function(prog->inherit[i].prog, name, node))) {
       if ((res == -1) || (prog->inherit[i].type_mod & DECL_PRIVATE)) {
@@ -960,6 +953,7 @@ int arrange_call_inherited(char *name, parse_node_t *node) {
   char *super_name, *p, *real_name = name;
   const char *shared_string;
   int ret;
+  std::vector<std::string> names;
 
   if (real_name[0] == ':') {
     super_name = nullptr;
@@ -974,46 +968,56 @@ int arrange_call_inherited(char *name, parse_node_t *node) {
   }
 
   num_inherits = NUM_INHERITS;
+  shared_string = findstring(real_name);
   /* no need to look for it unless its in the shared string table */
-  if ((shared_string = findstring(real_name))) {
-    ip = reinterpret_cast<inherit_t *>(mem_block[A_INHERITS].block);
-    for (; num_inherits > 0; ip++, num_inherits--) {
-      int tmp;
+  if (!shared_string) {
+      yyerror("No such function '%s' defined.", real_name);
+      goto invalid;
+  }
+  ip = reinterpret_cast<inherit_t *>(mem_block[A_INHERITS].block);
+  for (; num_inherits > 0; ip++, num_inherits--) {
+        int tmp;
 
-      if (super_name) {
-        int l = SHARED_STRLEN(ip->prog->filename); /* Including .c */
+        if (super_name) {
+            int l = SHARED_STRLEN(ip->prog->filename); /* Including .c */
+            names.emplace_back(std::string(ip->prog->filename));
 
-        if (l - 2 < super_length) {
-          continue;
-        }
-        if (strncmp(super_name, ip->prog->filename + l - 2 - super_length, super_length) != 0 ||
-            !((l - 2 == super_length) || ((ip->prog->filename + l - 3 - super_length)[0] == '/'))) {
-          continue;
-        }
-      }
-
-      if ((tmp = find_matching_function(ip->prog, shared_string, node))) {
-        if (tmp == -1 || (ip->type_mod & DECL_PRIVATE)) {
-          yyerror("Called function is private.");
-
-          goto invalid;
+            if (l - 2 < super_length) {
+                continue;
+            }
+            if (strncmp(super_name, ip->prog->filename + l - 2 - super_length, super_length) != 0 ||
+                !((l - 2 == super_length) || ((ip->prog->filename + l - 3 - super_length)[0] == '/'))) {
+                continue;
+            }
         }
 
-        ret = node->l.number + ip->function_index_offset;
-        node->l.number |= ((ip - reinterpret_cast<inherit_t *>(mem_block[A_INHERITS].block)) << 16);
-        return ret;
-      }
+        if ((tmp = find_matching_function(ip->prog, shared_string, node))) {
+            if (tmp == -1 || (ip->type_mod & DECL_PRIVATE)) {
+                yyerror("Called function is private.");
+
+                goto invalid;
+            }
+
+            ret = node->l.number + ip->function_index_offset;
+            node->l.number |= ((ip - reinterpret_cast<inherit_t *>(mem_block[A_INHERITS].block)) << 16);
+            return ret;
+        }
     }
-  } /* if in shared string table */
-  { yyerror("No such inherited function '%s'.", name); }
-
+    if (super_name) {
+        yyerror("Unable to find the inherited function '%s' in file '%s'.", real_name, std::string(super_name, super_length).c_str());
+        for(auto &name : names) {
+            yyerror("  Looked at '%s'", name.c_str());
+        }
+    } else {
+        yyerror("Unable to find the inherited function '%s'.", real_name);
+    }
 invalid:
-  node->kind = NODE_CALL_2;
-  node->v.number = F_CALL_INHERITED;
-  node->l.number = 0;
-  node->type = TYPE_ANY;
+    node->kind = NODE_CALL_2;
+    node->v.number = F_CALL_INHERITED;
+    node->l.number = 0;
+    node->type = TYPE_ANY;
 
-  return -1;
+    return -1;
 }
 
 /*
@@ -1022,11 +1026,10 @@ invalid:
  * function. Thus, there are tests to avoid generating error messages more
  * than once by looking at (flags & NAME_PROTOTYPE).
  */
-/* Warning: returns an index into A_FUNCTIONS, not the full
- * function list
+/* Returns an index into A_FUNCTIONS_DEFS.
  */
 int define_new_function(const char *name, int num_arg, int num_local, int flags, int type) {
-  int oldindex, num, newindex;
+  int oldindex=-1, num=-1, newindex=-1;
   unsigned short argument_start_index;
   ident_hash_elem_t *ihe;
   function_t *funp = nullptr;
@@ -1049,7 +1052,8 @@ int define_new_function(const char *name, int num_arg, int num_local, int flags,
      * 5.   A "late" prototype has been encountered.
      */
     if (funflags & FUNC_ALIAS) {
-      fatal("Inconsistent aliasing of functions!\n");
+      yyerror("Inconsistent aliasing of functions!\n");
+      return -1;
     }
 
     if (!(funflags & (FUNC_INHERITED | FUNC_PROTOTYPE | FUNC_UNDEFINED)) &&
@@ -1151,6 +1155,7 @@ int define_new_function(const char *name, int num_arg, int num_local, int flags,
   if (!funp) {
     num = mem_block[A_FUNCTIONS].current_size / sizeof(function_t);
     funp = reinterpret_cast<function_t *>(allocate_in_mem_block(A_FUNCTIONS, sizeof(function_t)));
+    memset(funp->default_args_findex, 0, sizeof(funp->default_args_findex));
     funp->funcname = make_shared_string(name);
     argument_start_index = INDEX_START_NONE;
     add_to_mem_block(A_ARGUMENT_INDEX, (char *)&argument_start_index, sizeof argument_start_index);
@@ -1181,11 +1186,14 @@ int define_new_function(const char *name, int num_arg, int num_local, int flags,
   if (exact_types) {
     flags |= FUNC_STRICT_TYPES;
   }
-  DEBUG_CHECK(!(flags & DECL_ACCESS), "No access level for function!\n");
+  if(!(flags & DECL_ACCESS)) {
+    yyerror("No access level for function!\n");
+  }
   newfunc->flags = flags;
 
   funp->num_local = num_local;
   funp->num_arg = num_arg;
+  funp->min_arg = num_arg;
   funp->type = type;
   funp->address = 0;
 #ifdef PROFILE_FUNCTIONS
@@ -1224,6 +1232,7 @@ int define_new_function(const char *name, int num_arg, int num_local, int flags,
   if (flags & FUNC_PROTOTYPE) {
     symbol_record(OP_SYMBOL_FUNC, current_file, current_line, name);
   }
+
   return newindex;
 }
 
@@ -1584,9 +1593,9 @@ int validate_function_call(int f, parse_node_t *args) {
       if (num_var) {
         yyerror("Illegal to pass a variable number of arguments to non-varargs function '%s'.",
                 funp->funcname);
-      } else if (funp->num_arg != num_arg) {
-        yyerror("Wrong number of arguments to '%s', expected: %d, got: %d.", funp->funcname,
-                funp->num_arg, num_arg);
+      } else if (funp->num_arg != num_arg && num_arg < funp->min_arg) {
+          yyerror("Wrong number of arguments to '%s', expected: %d, minimum: %d, got: %d.", funp->funcname,
+                  funp->num_arg, funp->min_arg, num_arg);
       }
     }
     /*
@@ -1611,13 +1620,13 @@ int validate_function_call(int f, parse_node_t *args) {
     if (arg_types) {
       int arg, i, tmp;
       parse_node_t *enode = args;
-      int fnarg = funp->num_arg;
+      int fnarg = funp->min_arg;
 
       if (funflags & FUNC_TRUE_VARARGS) {
         fnarg--;
       }
 
-      for (i = 0; static_cast<unsigned>(i) < fnarg && i < num_arg; i++) {
+      for (i = 0; i < fnarg && i < num_arg; i++) {
         if (enode->type & 1) {
           break;
         }
@@ -1990,7 +1999,7 @@ void yywarn(const char *fmt, ...) {
 /*
  * Compile an LPC file.
  */
-program_t *compile_file(std::unique_ptr<LexStream> stream, char *name) {
+program_t *compile_file(std::unique_ptr<LexStream> stream, const char *name) {
   int yyparse(void);
   static int guard = 0;
   program_t *prog;
@@ -2050,18 +2059,22 @@ static int compare_funcs(const void *x, const void *y) {
   /* make sure #global_init# stays last; also shuffle empty entries to
    * the end so we can delete them easily.
    */
-  if (n1[0] == '#') {
-    sp1 = 1;
-  } else if (FUNC(*(unsigned short *)x)->address == ADDRESS_MAX) {
+  if (FUNC(*(unsigned short *)x)->address == ADDRESS_MAX) {
+    sp1 = 3;
+  } else if (strcmp(n1, APPLY___INIT) == 0) {
     sp1 = 2;
+  } else if (n1[0] == APPLY___INIT_SPECIAL_CHAR) {
+    sp1 = 1;
   } else {
     sp1 = 0;
   }
 
-  if (n2[0] == '#') {
-    sp2 = 1;
-  } else if (FUNC(*(unsigned short *)y)->address == ADDRESS_MAX) {
+  if (FUNC(*(unsigned short *)y)->address == ADDRESS_MAX) {
+    sp2 = 3;
+  } else if (strcmp(n2, APPLY___INIT) == 0) {
     sp2 = 2;
+  }  else if (n2[0] == APPLY___INIT_SPECIAL_CHAR) {
+    sp2 = 1;
   } else {
     sp2 = 0;
   }
@@ -2129,8 +2142,7 @@ static void handle_functions() {
                           inherited_prog->num_functions_defined;
 
     if (inherited_prog->num_functions_defined &&
-        inherited_prog->function_table[inherited_prog->num_functions_defined - 1].funcname[0] ==
-            APPLY___INIT_SPECIAL_CHAR) {
+        strcmp(APPLY___INIT, inherited_prog->function_table[inherited_prog->num_functions_defined - 1].funcname) == 0) {
       comp_last_inherited--;
     }
   } else {
@@ -2158,8 +2170,8 @@ static void handle_functions() {
         final_index = comp_last_inherited + comp_sorted_funcs[cur_def->u.index];
       }
       if (cur_def->flags & FUNC_ALIAS) {
-        fatal("Aliasing difficulties!\n");
-        exit(1);
+        yyerror("Aliasing difficulties!\n");
+        return ;
       }
 
       comp_def_index_map[i] = final_index;
@@ -2181,10 +2193,6 @@ static void handle_functions() {
         }
       }
     }
-  }
-
-  if (total_func) {
-    FREE((char *)comp_sorted_funcs);
   }
 }
 
@@ -2248,9 +2256,13 @@ static program_t *epilog(void) {
 
   current_tree = TREE_MAIN;
   generate(comp_trees[TREE_MAIN]);
+  // DEBUG:
+  // dump_tree(comp_trees[TREE_MAIN]);
 
   current_tree = TREE_INIT;
   generate(comp_trees[TREE_INIT]);
+  // DEBUG:
+  // dump_tree(comp_trees[TREE_INIT]);
 
   current_tree = TREE_MAIN;
 
@@ -2354,6 +2366,31 @@ static program_t *epilog(void) {
   prog->function_table = reinterpret_cast<function_t *>(p);
   for (i = 0; i < num_func; i++) {
     prog->function_table[i] = *FUNC(func_index_map[i]);
+    // debug_message("Function table %d: %s\n", i, prog->function_table[i].funcname);
+  }
+
+  // Fixup the default argument function index
+  for (int i = 0; i < num_func; i++) {
+    auto *func = &prog->function_table[i];
+    constexpr auto default_args_limit = sizeof(func->default_args_findex) / sizeof(func->default_args_findex[0]);
+    if (func->min_arg != func->num_arg) {
+      // debug_message("Handling default arguments for %d: %s\n", i, func->funcname);
+      for (int j = 0; j < default_args_limit; j++) {
+        auto findex = func->default_args_findex[j];
+        if (findex != 0) {
+          func->default_args_findex[j] = comp_sorted_funcs[findex];
+          // debug_message("Default argument %d of function %s was %d, now is %d\n", j, func->funcname, findex, func->default_args_findex[j]);
+          if(prog->function_table[(func->default_args_findex[j])].funcname[0] != APPLY___INIT_SPECIAL_CHAR) {
+            func->default_args_findex[j] = 0; // attempt to continue;
+            DEBUG_FATAL("Bad new default argument index calculated\n");
+          }
+        }
+      }
+    }
+  }
+
+  if (num_func) {
+    FREE((char *)comp_sorted_funcs);
   }
 
   p += align(sizeof(function_t) * num_func);
@@ -2460,7 +2497,7 @@ static program_t *epilog(void) {
 /*
  * Initialize the environment that the compiler needs.
  */
-static void prolog(std::unique_ptr<LexStream> stream, char *name) {
+static void prolog(std::unique_ptr<LexStream> stream, const char *name) {
   int i;
 
   function_context.num_parameters = -1;
@@ -2719,7 +2756,7 @@ void save_file_info(int file_id, int lines) {
   add_to_mem_block(A_FILE_INFO, (char *)&fi[0], sizeof(fi));
 }
 
-int add_program_file(char *name, int top) {
+int add_program_file(const char *name, int top) {
   if (!top) {
     add_to_mem_block(A_INCLUDES, name, strlen(name) + 1);
   }

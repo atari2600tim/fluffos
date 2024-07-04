@@ -71,10 +71,12 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU" OR ${CMAKE_CXX_COMPILER_ID} STREQUAL
 
   # Sanitizer support
   if (ENABLE_SANITIZER)
-    add_compile_options("-fsanitize=address,undefined")
+    add_compile_options("-fsanitize=address")
+    #add_compile_options("-fsanitize=undefined")
     add_compile_options("-fno-common")
-    # add_linker_options is only avaiable cmake 3.13
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined -fno-common")
+
+    add_link_options("-fsanitize=address")
+    #add_link_options("-fsanitize=undefined")
   else ()
     add_compile_options(
       "-D_FORTIFY_SOURCE=2"
@@ -233,6 +235,7 @@ add_subdirectory(thirdparty/fmt EXCLUDE_FROM_ALL)
 include_directories(thirdparty/fmt/include)
 include_directories(AFTER SYSTEM thirdparty/json/include)
 add_subdirectory(thirdparty/backward-cpp EXCLUDE_FROM_ALL)
+include_directories(AFTER SYSTEM thirdparty/argparse/include)
 
 set(DISABLE_WERROR ON CACHE BOOL "" FORCE)
 set(LWS_WITH_SHARED OFF CACHE BOOL "" FORCE)
@@ -287,6 +290,10 @@ set(GENERATRED_SOURCE
   "${CMAKE_CURRENT_BINARY_DIR}/options.autogen.h"
   )
 
+set(GENERATRED_DOCS
+  "${CMAKE_CURRENT_BINARY_DIR}/keywords.json"
+)
+
 add_custom_command(
   OUTPUT "applies_table.autogen.cc" "applies_table.autogen.h"
   COMMAND "build_applies" "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -316,6 +323,12 @@ add_custom_command(
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/base/internal/options_incl.h"
 )
 
+add_custom_command(
+  OUTPUT "keywords.json"
+  COMMAND "generate_keywords"
+  DEPENDS "generate_keywords" "${CMAKE_CURRENT_BINARY_DIR}/efuns.autogen.h"
+)
+
 find_package(BISON 3.8)
 if (${BISON_FOUND})
   message(STATUS "BISON: ${BISON_VERSION}")
@@ -342,6 +355,7 @@ set(SRC
   "mainlib.cc"
   "user.cc"
   "symbol.cc"
+  "ofile.cc"
   "net/msp.cc"
   "net/tls.cc"
   "net/telnet.cc"
@@ -374,6 +388,7 @@ set(SRC
   "vm/internal/base/array.cc"
   "vm/internal/base/buffer.cc"
   "vm/internal/base/class.cc"
+  "vm/internal/base/debug.cc"
   "vm/internal/base/function.cc"
   "vm/internal/base/interpret.cc"
   "vm/internal/base/mapping.cc"
@@ -502,6 +517,15 @@ target_link_libraries(lpcc PUBLIC ${FLUFFOS_LINK})
 add_executable(symbol "main_symbol.cc")
 target_link_libraries(symbol PUBLIC ${FLUFFOS_LINK})
 
+add_executable(generate_keywords "main_generate_keywords.cc")
+target_link_libraries(generate_keywords PUBLIC ${FLUFFOS_LINK})
+
+add_executable(o2json "main_o2json.cc")
+target_link_libraries(o2json PUBLIC ${FLUFFOS_LINK})
+
+add_executable(json2o "main_json2o.cc")
+target_link_libraries(json2o PUBLIC ${FLUFFOS_LINK})
+
 include(helper)
 
 message(STATUS "Final Compile Flags for libdriver: ")
@@ -510,7 +534,10 @@ print_iterface_target_properties(libdriver)
 message(STATUS "Final Compile Flags for driver: ")
 print_target_properties(driver)
 
-install(TARGETS driver lpcc
+install(TARGETS ${GENERATED_DOCS}
+        RUNTIME DESTINATION bin)
+
+install(TARGETS driver lpcc symbol o2json json2o
   RUNTIME DESTINATION bin)
 
 # LPC stdlib files
