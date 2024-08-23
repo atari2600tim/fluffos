@@ -1,7 +1,8 @@
 ---
-layout: default
+layout: doc
 title: pcre / pcre_match_all
 ---
+# pcre_match_all
 
 ### NAME
 
@@ -9,7 +10,7 @@ title: pcre / pcre_match_all
 
 ### SYNOPSIS
 
-    mixed pcre_match_all(string, string);
+    mixed pcre_match_all(string input, string pattern);
 
 ### DESCRIPTION
 
@@ -37,5 +38,5 @@ title: pcre / pcre_match_all
         })
       }),
 
-    There are 1 match in the entire string, the first item in the array is the matched substring, then all the
-    captured groups.
+    There are 1 match in the entire string, the first item in the array is the
+    matched substring, then all the captured groups.

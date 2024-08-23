@@ -6,6 +6,8 @@
 #include "compiler/internal/lex.h"
 #include "compiler/internal/icode.h"
 
+#include <fmt/format.h>
+
 static void disassemble(FILE *f /*f*/, char *code /*code*/, int /*start*/ start, int /*end*/ end,
                         program_t *prog /*prog*/);
 static const char *disassem_string(const char * /*str*/);
@@ -17,12 +19,21 @@ void dump_prog_details(program_t *prog, FILE *f, int flags) {
 
   fprintf(f, "\n;;; %s\n\n", prog->filename);
 
-  fprintf(f, "VARIABLES:\n");
+  fprintf(f, "Globals:\n");
+  for (i = 0; i < prog->num_variables_total; i++) {
+      fprintf(f, "%4d: %s\n", i, variable_name(prog, i));
+  }
+
+  int variable_runtime_index = 0;
+  if (prog->num_inherited > 0) {
+      variable_runtime_index = prog->inherit[prog->num_inherited - 1].variable_index_offset + prog->inherit[prog->num_inherited - 1].prog->num_variables_total;
+  }
+  fprintf(f, "VARIABLES defined:\n");
   for (i = 0; i < prog->num_variables_defined; i++) {
     char buf[255];
     auto end = &buf[sizeof(buf) - 1];
     get_type_name(&buf[0], end, prog->variable_types[i]);
-    fprintf(f, "%4d: %s%s\n", i, buf, prog->variable_table[i]);
+    fprintf(f, "%4d: %s%s\n", variable_runtime_index + i, buf, prog->variable_table[i]);
   }
   fprintf(f, "STRINGS:\n");
   for (i = 0; i < prog->num_strings; i++) {
@@ -58,7 +69,12 @@ void dump_prog_details(program_t *prog, FILE *f, int flags) {
     fprintf(f, "\n;;;  *** Line Number Info ***\n");
     dump_line_numbers(f, prog);
   }
+
+  for (int i = 0; i < prog->num_inherited; i++) {
+      dump_prog_details(prog->inherit[i].prog, f, flags);
+  }
 }
+
 /* Current flags:
  * 1 - do disassembly
  * 2 - dump line number table
@@ -71,13 +87,14 @@ void dump_prog(program_t *prog, FILE *f, int flags) {
   fprintf(f, "INHERITS:\n");
   fprintf(f, "      name                    fio    vio\n");
   fprintf(f, "      ----------------        ---    ---\n");
+
   for (i = 0; i < prog->num_inherited; i++) {
     fprintf(f, "\t%-20s  %5d  %5d\n", prog->inherit[i].prog->filename,
             prog->inherit[i].function_index_offset, prog->inherit[i].variable_index_offset);
   }
   fprintf(f, "FUNCTIONS:\n");
-  fprintf(f, "      name                  offset  mods   flags   fio  # locals  # args\n");
-  fprintf(f, "      --------------------- ------  ----  -------  ---  --------  ------\n");
+  fprintf(f, "      name                      offset  mods   flags   fio  vio # locals  # args # def args\n");
+  fprintf(f, "      ------------------------- ------  ----  -------  ---  --- --------  ------ ----------\n");
   num_funcs_total = prog->last_inherited + prog->num_functions_defined;
 
   for (i = 0; i < num_funcs_total; i++) {
@@ -127,18 +144,23 @@ void dump_prog(program_t *prog, FILE *f, int flags) {
         }
       }
 
-      fprintf(f, "%4d: %-20s  %6d  %4s  %7s  %3d\n", i, func_entry->funcname, low, smods, sflags,
-              runtime_index - prog->inherit[low].function_index_offset);
+      fprintf(f, "%4d: %-24s  %6d  %4s  %7s  %3d %3d\n", i, func_entry->funcname, low, smods, sflags,
+              runtime_index - prog->inherit[low].function_index_offset, prog->inherit[low].variable_index_offset);
     } else {
-      fprintf(f, "%4d: %-20s  %6d  %4s  %7s        %7d   %5d\n", i, func_entry->funcname,
-              runtime_index - prog->last_inherited, smods, sflags, func_entry->num_arg,
-              func_entry->num_local);
+      fprintf(f, "%4d: %-24s  %6d  %4s  %7s             %7d   %5d %10d", i, func_entry->funcname,
+              runtime_index - prog->last_inherited, smods, sflags, func_entry->num_local,
+              func_entry->num_arg, func_entry->num_arg - func_entry->min_arg);
+
+      std::string default_arg_findex_map;
+      for(int j = 0; j < func_entry->num_arg; j++) {
+        if (func_entry->default_args_findex[j] != 0) {
+          default_arg_findex_map += fmt::format(FMT_STRING(" {}:{}"), j, func_entry->default_args_findex[j]);
+        }
+      }
+      fprintf(f, " %s\n", default_arg_findex_map.c_str());
     }
   }
 
-  for (i = 0; i < prog->num_inherited; i++) {
-    dump_prog_details(prog->inherit[i].prog, f, flags);
-  }
   dump_prog_details(prog, f, flags);
 }
 
@@ -189,6 +211,12 @@ static void print_function_sig(FILE *f, program_t *prog, int idx) {
   auto end = &buf[sizeof(buf) - 1];
 
   auto funp = prog->function_table[idx];
+  auto funflags = prog->function_flags[prog->last_inherited + idx];
+
+  buf[0] = '\0';
+  get_type_modifiers(&buf[0], end, funflags);
+  fprintf(f, "%s", buf);
+
   get_type_name(&buf[0], end, funp.type);
   fprintf(f, "%s", buf);
   fprintf(f, "%s", funp.funcname);
@@ -210,6 +238,9 @@ static void print_function_sig(FILE *f, program_t *prog, int idx) {
       }
     } else {
       fprintf(f, "args: %d", funp.num_arg);
+      if (funp.min_arg != funp.num_arg) {
+        fprintf(f, "min args: %d", funp.num_arg);
+      }
     }
   }
   fprintf(f, ")");
@@ -291,7 +322,7 @@ static void disassemble(FILE *f, char *code, int start, int end, program_t *prog
     }
 
     fflush(f);
-    fprintf(f, "%04tx: ", (pc - 1) - code);
+    fprintf(f, "%04tx: ", (pc - 1) - code); // Address
 
     switch (instr) {
       case F_PUSH: {
@@ -414,15 +445,17 @@ static void disassemble(FILE *f, char *code, int start, int end, program_t *prog
         break;
       }
 
-      case F_CALL_FUNCTION_BY_ADDRESS:
+      case F_CALL_FUNCTION_BY_ADDRESS: {
         COPY_SHORT(&sarg, pc);
-        pc += 3;
+        pc += sizeof(short);
+        const uint8_t args = EXTRACT_UCHAR(pc++);
         if (sarg < NUM_FUNS) {
-          sprintf(buff, "%-12s %5d", function_name(prog, sarg), sarg);
+          sprintf(buff, "%s, pushed_args:%d", function_name(prog, sarg), args);
         } else {
           sprintf(buff, "<out of range %d>", sarg);
         }
-        break;
+      }
+      break;
 
       case F_CALL_INHERITED: {
         program_t *newprog;
@@ -533,10 +566,13 @@ static void disassemble(FILE *f, char *code, int start, int end, program_t *prog
             }
             break;
           case FP_FUNCTIONAL:
-          case FP_FUNCTIONAL | FP_NOT_BINDABLE:
-            sprintf(buff, "<functional, %d args>\nCode:", pc[0]);
-            pc += 3;
+          case FP_FUNCTIONAL | FP_NOT_BINDABLE: {
+            uint8_t num_args = EXTRACT_UCHAR(pc++);
+            uint16_t size;
+            LOAD_SHORT(size, pc);
+            sprintf(buff, "<functional, %d args>: Code size: %d,", num_args, size);
             break;
+          }
           case FP_ANONYMOUS:
           case FP_ANONYMOUS | FP_NOT_BINDABLE:
             COPY_SHORT(&sarg, &pc[2]);
@@ -674,9 +710,9 @@ static void disassemble(FILE *f, char *code, int start, int end, program_t *prog
       while (saved_pc != pc) {
         p += sprintf(p, "%02hhX ", *saved_pc++);
       }
-      fprintf(f, " %-25s", tmp);
+      fprintf(f, " %-25s", tmp); // byte code in HEX
     }
-    fprintf(f, " %-20s; %s\n", query_instr_name(instr), buff);
+    fprintf(f, " %-35s; %s\n", query_instr_name(instr), buff);
   }
 
   // print last line

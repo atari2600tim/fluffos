@@ -1,7 +1,8 @@
 ---
-layout: default
+layout: doc
 title: contrib / network_stats.pre
 ---
+# network_stats
 
 ### NAME
 
@@ -31,3 +32,7 @@ title: contrib / network_stats.pre
     - incoming volume sockets : int
     - outgoing packets sockets : int
     - outgoing volume sockets : int
+
+### SEE ALSO
+
+    sys_network_ports(3)

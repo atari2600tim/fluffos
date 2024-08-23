@@ -39,6 +39,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Setup include directoires
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
@@ -70,10 +71,12 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU" OR ${CMAKE_CXX_COMPILER_ID} STREQUAL
 
   # Sanitizer support
   if (ENABLE_SANITIZER)
-    add_compile_options("-fsanitize=address,undefined")
+    add_compile_options("-fsanitize=address")
+    #add_compile_options("-fsanitize=undefined")
     add_compile_options("-fno-common")
-    # add_linker_options is only avaiable cmake 3.13
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined -fno-common")
+
+    add_link_options("-fsanitize=address")
+    #add_link_options("-fsanitize=undefined")
   else ()
     add_compile_options(
       "-D_FORTIFY_SOURCE=2"
@@ -198,8 +201,9 @@ endif ()
 
 # System Libraries
 find_package(OpenSSL 1.0.1 COMPONENTS SSL REQUIRED)
-include_directories(SYSTEM ${OPENSSL_INCLUDE_DIR})
+include_directories(AFTER SYSTEM ${OPENSSL_INCLUDE_DIR})
 
+set(ICU_DEBUG ON)
 find_package(ICU REQUIRED COMPONENTS uc dt)
 # Make ICU use utf-8 internally
 add_compile_options("-DU_CHARSET_IS_UTF8=1")
@@ -208,7 +212,7 @@ if(STATIC)
 ENDIF()
 
 # multiple packages uses this, so we simply do a global inclusion too.
-include_directories(SYSTEM ${ICU_INCLUDE_DIRS})
+include_directories(AFTER SYSTEM ${ICU_INCLUDE_DIRS})
 
 # Bundled libraries
 set(EVENT__DISABLE_BENCHMARK ON CACHE BOOL "" FORCE)
@@ -230,8 +234,9 @@ add_subdirectory(thirdparty/filesystem EXCLUDE_FROM_ALL)
 include_directories(thirdparty/filesystem/include)
 add_subdirectory(thirdparty/fmt EXCLUDE_FROM_ALL)
 include_directories(thirdparty/fmt/include)
-include_directories(SYSTEM thirdparty/json/include)
+include_directories(AFTER SYSTEM thirdparty/json/include)
 add_subdirectory(thirdparty/backward-cpp EXCLUDE_FROM_ALL)
+include_directories(AFTER SYSTEM thirdparty/argparse/include)
 
 set(DISABLE_WERROR ON CACHE BOOL "" FORCE)
 set(LWS_WITH_SHARED OFF CACHE BOOL "" FORCE)
@@ -252,7 +257,8 @@ set(LWS_WITH_LEJP OFF CACHE BOOL "" FORCE)
 set(LWS_WITH_LEJP_CONF OFF CACHE BOOL "" FORCE)
 set(LWS_UNIX_SOCK OFF CACHE BOOL "" FORCE)
 set(LWS_WITH_NETLINK OFF CACHE BOOL "" FORCE)
-set(OPENSSL_FOUND 0) # hack to force lws re-search openssl
+set(OPENSSL_INCLUDE_DIRS ${OPENSSL_INCLUDE_DIR} CACHE STRING "" FORCE)
+set(OPENSSL_FOUND 1) # hack to avoid lws re-search openssl
 set(LIBEVENT_FOUND 1) # hack to stop libwebsockets from finding libevent
 set(LIBEVENT_LIBRARIES "event_core_static")
 add_subdirectory(thirdparty/libwebsockets EXCLUDE_FROM_ALL)
@@ -285,6 +291,10 @@ set(GENERATRED_SOURCE
   "${CMAKE_CURRENT_BINARY_DIR}/options.autogen.h"
   )
 
+set(GENERATRED_DOCS
+  "${CMAKE_CURRENT_BINARY_DIR}/keywords.json"
+)
+
 add_custom_command(
   OUTPUT "applies_table.autogen.cc" "applies_table.autogen.h"
   COMMAND "build_applies" "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -314,6 +324,12 @@ add_custom_command(
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/base/internal/options_incl.h"
 )
 
+add_custom_command(
+  OUTPUT "keywords.json"
+  COMMAND "generate_keywords"
+  DEPENDS "generate_keywords" "${CMAKE_CURRENT_BINARY_DIR}/efuns.autogen.h"
+)
+
 find_package(BISON 3.8)
 if (${BISON_FOUND})
   message(STATUS "BISON: ${BISON_VERSION}")
@@ -340,6 +356,7 @@ set(SRC
   "mainlib.cc"
   "user.cc"
   "symbol.cc"
+  "ofile.cc"
   "net/msp.cc"
   "net/tls.cc"
   "net/telnet.cc"
@@ -372,6 +389,7 @@ set(SRC
   "vm/internal/base/array.cc"
   "vm/internal/base/buffer.cc"
   "vm/internal/base/class.cc"
+  "vm/internal/base/debug.cc"
   "vm/internal/base/function.cc"
   "vm/internal/base/interpret.cc"
   "vm/internal/base/mapping.cc"
@@ -432,9 +450,7 @@ endif ()
 # end of JEMALLOC
 
 target_link_libraries(libdriver PUBLIC ghc_filesystem)
-
-add_compile_options("-DFMT_HEADER_ONLY=1")
-target_link_libraries(libdriver PRIVATE fmt::fmt-header-only)
+target_link_libraries(libdriver PUBLIC fmt::fmt)
 
 list(APPEND FLUFFOS_LIBRARIES autogen)
 
@@ -455,14 +471,12 @@ endif()
 target_link_libraries(libdriver PRIVATE crypt)
 target_link_libraries(libdriver PUBLIC ${LIBWEBSOCKETS_LIBRARIES_STATIC})
 target_link_libraries(libdriver PUBLIC libtelnet)
-target_compile_definitions(libdriver PUBLIC ${BACKWARD_DEFINITIONS})
-target_include_directories(libdriver PUBLIC ${BACKWARD_INCLUDE_DIRS})
-target_link_libraries(libdriver PUBLIC ${BACKWARD_LIBRARIES})
+target_link_libraries(libdriver PUBLIC ${BACKWARD_ENABLE})
+add_backward(libdriver)
 
 # System libraries
 target_link_libraries(libdriver PUBLIC OpenSSL::SSL)
 target_link_libraries(libdriver PUBLIC ${ICU_LIBRARIES})
-# target_link_libraries(libdriver PUBLIC ${LIBEVENT_LIBRARIES})
 
 # Platform Libraries
 
@@ -481,11 +495,6 @@ CHECK_LIBRARY_EXISTS(rt clock_gettime "time.h" HAVE_CLOCK_GETTIME_IN_RT)
 if (HAVE_CLOCK_GETTIME_IN_RT)
   target_link_libraries(libdriver PUBLIC rt)
 endif ()
-
-# GTEST
-#include(GoogleTest)
-#enable_testing()
-#gtest_discover_tests(driver)
 
 set(LINK_WHOLE_ARCHIVE -Wl,--whole-archive)
 set(LINK_NO_WHOLE_ARCHIVE -Wl,--no-whole-archive)
@@ -509,12 +518,27 @@ target_link_libraries(lpcc PUBLIC ${FLUFFOS_LINK})
 add_executable(symbol "main_symbol.cc")
 target_link_libraries(symbol PUBLIC ${FLUFFOS_LINK})
 
+add_executable(generate_keywords "main_generate_keywords.cc")
+target_link_libraries(generate_keywords PUBLIC ${FLUFFOS_LINK})
+
+add_executable(o2json "main_o2json.cc")
+target_link_libraries(o2json PUBLIC ${FLUFFOS_LINK})
+
+add_executable(json2o "main_json2o.cc")
+target_link_libraries(json2o PUBLIC ${FLUFFOS_LINK})
+
 include(helper)
 
-message("Final Compile Flags: ")
+message(STATUS "Final Compile Flags for libdriver: ")
+print_iterface_target_properties(libdriver)
+
+message(STATUS "Final Compile Flags for driver: ")
 print_target_properties(driver)
 
-install(TARGETS driver lpcc
+install(TARGETS ${GENERATED_DOCS}
+        RUNTIME DESTINATION bin)
+
+install(TARGETS driver lpcc symbol o2json json2o
   RUNTIME DESTINATION bin)
 
 # LPC stdlib files
@@ -541,6 +565,13 @@ if (${BISON_FOUND})
           COMMAND "${CMAKE_COMMAND}" -E copy "${BISON_Grammar_OUTPUT_SOURCE}" ${CMAKE_CURRENT_SOURCE_DIR}/compiler/internal/
           COMMAND "${CMAKE_COMMAND}" -E copy "${BISON_Grammar_OUTPUT_HEADER}" ${CMAKE_CURRENT_SOURCE_DIR}/compiler/internal/
           COMMENT "Copying to output directory")
+endif()
+
+find_package(GTest)
+if(${GTEST_FOUND})
+  include(GoogleTest)
+  enable_testing()
+  add_subdirectory(tests)
 endif()
 
 # Must keep this line at the end, so we get all the variables.

@@ -1,7 +1,8 @@
 ---
-layout: default
+layout: doc
 title: arrays / map_array
 ---
+# map_array
 
 ### NAME
 
@@ -27,5 +28,5 @@ title: arrays / map_array
 
 ### SEE ALSO
 
-    filter_array(3), sort_array(3), map(3)
+    filter(3), map(3), sort_array(3), unique_array(3)
 

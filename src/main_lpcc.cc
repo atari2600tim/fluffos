@@ -22,14 +22,15 @@ int main(int argc, char** argv) {
   ScopedTracer const trace(__PRETTY_FUNCTION__);
 
   if (argc != 3) {
-    std::cerr << "Usage: lpcc <config> lpc_file" << std::endl;
+    std::cerr << "Usage: lpcc config_file lpc_file" << std::endl;
     return 1;
   }
 
   Tracer::begin("init_main", EventCategory::DEFAULT);
 
   // Initialize libevent, This should be done before executing LPC.
-  auto* base = init_main(argc, argv);
+  auto config = get_argument(0, argc, argv);
+  auto* base = init_main(config);
 
   Tracer::end("init_main", EventCategory::DEFAULT);
 

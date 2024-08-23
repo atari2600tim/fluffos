@@ -23,6 +23,7 @@
 #include "interactive.h"  // for interactive_t, FIXME
 #include "vm/internal/apply.h"
 #include "vm/internal/base/machine.h"
+#include "vm/internal/base/debug.h"
 #include "vm/internal/master.h"
 #include "vm/internal/otable.h"
 #include "vm/internal/simul_efun.h"
@@ -130,12 +131,6 @@ static char *make_new_name(const char * /*str*/);
 static void send_say(object_t * /*ob*/, const char * /*text*/, array_t * /*avoid*/);
 #endif
 
-void check_legal_string(const char *s) {
-  if (strlen(s) > LARGEST_PRINTABLE_STRING) {
-    error("Printable strings limited to length of %d.\n", LARGEST_PRINTABLE_STRING);
-  }
-}
-
 #ifdef PRIVS
 static void init_privs_for_object(object_t *ob) {
   svalue_t *value;
@@ -206,7 +201,7 @@ static int give_uid_to_object(object_t *ob) {
    * Now we are sure that we have a creator name. Do not call apply()
    * again, because creator_name will be lost !
    */
-  if (strcmp(current_object->uid->name, creator_name) == 0) {
+  if (current_object && strcmp(current_object->uid->name, creator_name) == 0) {
     /*
      * The loaded object has the same uid as the loader.
      */
@@ -480,7 +475,8 @@ object_t *load_object(const char *lname, int callcreate) {
     error("Could not read the file '/%s'.\n", real_name);
   }
   save_command_giver(command_giver);
-  prog = compile_file(f, obname);
+  auto stream = std::make_unique<FileLexStream>(f);
+  prog = compile_file(std::move(stream), obname);
   restore_command_giver();
   update_compile_av(total_lines);
   total_lines = 0;
@@ -817,6 +813,24 @@ void destruct_object(object_t *ob) {
   }
 #endif
 
+/*
+  * Notify object that it is scheduled for destruction
+  *
+  * Proceed with destruction even if there is an error
+  * in the destructing() function in the mudlib.
+  */
+  if(ob->flags & O_NOTIFY_DESTRUCT) {
+    error_context_t econ;
+    save_context(&econ) ;
+    try {
+      safe_apply(APPLY_ON_DESTRUCT, ob, 0, ORIGIN_DRIVER);
+    } catch (...) {  // catch everything
+      restore_context(&econ);
+      /* condition was restored to where it was when we came in */
+    }
+    pop_context(&econ);
+  }
+
 #if defined(PACKAGE_SOCKETS) || defined(PACKAGE_EXTERNAL)
   /*
    * check if object has an efun socket referencing it for a callback. if
@@ -881,7 +895,7 @@ void destruct_object(object_t *ob) {
   ob->shadowed = nullptr;
 #endif
 
-  debug(d_flag, "Deobject_t /%s (ref %d)", ob->obname, ob->ref);
+  debug(d_flag, "Deobject_t /%s (ref %d)\n", ob->obname, ob->ref);
 
 #ifndef NO_ENVIRONMENT
   /* try to move our contents somewhere */
@@ -1157,7 +1171,6 @@ void say(svalue_t *v, array_t *avoid) {
   object_t *ob, *origin;
   const char *buff;
 
-  check_legal_string(v->u.string);
   buff = v->u.string;
 
   if (current_object->flags & O_LISTENER || current_object->interactive) {
@@ -1213,7 +1226,6 @@ void tell_room(object_t *room, svalue_t *v, array_t *avoid) {
 
   switch (v->type) {
     case T_STRING:
-      check_legal_string(v->u.string);
       buff = v->u.string;
       break;
     case T_OBJECT:
@@ -1271,8 +1283,6 @@ void tell_room(object_t *room, svalue_t *v, array_t *avoid) {
 
 void shout_string(const char *str) {
   object_t *ob;
-
-  check_legal_string(str);
 
   for (ob = obj_list; ob; ob = ob->next_all) {
     if (!(ob->flags & O_LISTENER) || (ob == command_giver)
@@ -1393,10 +1403,6 @@ void print_svalue(svalue_t *arg) {
     switch (arg->type) {
       case T_STRING:
         len = SVALUE_STRLEN(arg);
-        if (len > LARGEST_PRINTABLE_STRING) {
-          error("Printable strings limited to length of %d.\n", LARGEST_PRINTABLE_STRING);
-        }
-
         tell_object(command_giver, arg->u.string, len);
         break;
       case T_OBJECT:
@@ -1659,15 +1665,9 @@ void free_sentence(sentence_t *p) {
       vsnprintf(msg_buf, 2048, fmt, args);
       va_end(args);
       debug_message("******** FATAL ERROR: %s\n", msg_buf);
-#ifdef DEBUG
-      // make DEBUG driver directly crash, if there is debugger
-      // it will catch the problem and allow debugging.
-      break;
-#endif
       if (Tracer::enabled()) {
         Tracer::collect();
       }
-      debug_message("FluffOS driver attempting to exit gracefully.\n");
       if (current_file) {
         debug_message("(occurred during compilation of %s at line %d)\n", current_file,
                       current_line);
@@ -1675,8 +1675,15 @@ void free_sentence(sentence_t *p) {
       if (current_object) {
         debug_message("(current object was /%s)\n", current_object->obname);
       }
-
-      dump_trace(1);
+      if (current_prog) {
+        dump_vm_state();
+      }
+#ifdef DEBUG
+      // make DEBUG driver directly crash, if there is debugger
+      // it will catch the problem and allow debugging.
+      break;
+#endif
+      debug_message("FluffOS driver attempting to exit gracefully.\n");
 #ifdef PACKAGE_MUDLIB_STATS
       save_stat_files();
 #endif
@@ -1916,7 +1923,12 @@ void _error_handler(char *err) {
     }
     num_mudlib_error--;
     num_error++;
-  } else if (num_mudlib_error == 1) {
+  } else if (num_mudlib_error > 10) {
+    num_mudlib_error = 0;
+    // stop recurse errors
+    _error_handler(err);
+    goto exit;
+  } else {
     debug_message("Error in mudlib error handler: ");
     debug_message_with_location(err);
     dump_trace(CONFIG_INT(__RC_TRACE_CODE__));
@@ -1939,6 +1951,8 @@ exit:
 }
 
 [[noreturn]] void error_needs_free(char *s) {
+  DEBUG_CHECK(current_error_context == nullptr, "error() without context");
+
   char err_buf[2048];
   strncpy(err_buf + 1, s, 2047);
   err_buf[0] = '*'; /* all system errors get a * at the start */
@@ -1949,6 +1963,8 @@ exit:
 }
 
 [[noreturn]] void error(const char *const fmt, ...) {
+  DEBUG_CHECK(current_error_context == nullptr, "error() without context");
+
   char err_buf[2048];
   va_list args;
 

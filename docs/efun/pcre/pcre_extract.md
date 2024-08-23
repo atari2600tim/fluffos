@@ -1,7 +1,8 @@
 ---
-layout: default
+layout: doc
 title: pcre / pcre_extract
 ---
+# pcre_extract
 
 ### NAME
 
@@ -9,7 +10,7 @@ title: pcre / pcre_extract
 
 ### SYNOPSIS
 
-    string *pcre_extract(string, string);
+    string *pcre_extract(string input, string pattern);
 
 ### DESCRIPTION
 

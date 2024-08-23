@@ -42,6 +42,7 @@
 #include "scratchpad.h"
 
 #include "symbol.h"
+#include "compiler/internal/LexStream.h"
 
 // FIXME: in master.h
 extern struct object_t *master_ob;
@@ -92,7 +93,10 @@ int num_parse_error; /* Number of errors in the parser. */
 
 lpc_predef_t *lpc_predefs = nullptr;
 
-static int yyin_desc;
+namespace {
+std::unique_ptr<LexStream> current_stream = nullptr;
+}  // namespace
+
 int lex_fatal;
 static const char **inc_list;  // global include path from runtime config
 static int inc_list_size;
@@ -111,7 +115,7 @@ char *outp;
 
 typedef struct incstate_s {
   struct incstate_s *next;
-  int yyin_desc;
+  LexStream *stream;  // raw pointer because incstate_t is alloated using malloc
   int line;
   const char *file;
   int file_id;
@@ -272,6 +276,7 @@ static void handle_cond(LPC_INT /*c*/);
 
 int parseStringLiteral(unsigned char c);
 int parseHexIntegerLiteral(unsigned char c);
+int parseBinaryIntegerLiteral(unsigned char c);
 static defn_t *defns[DEFHASH];
 static ifstate_t *iftop = nullptr;
 
@@ -842,7 +847,7 @@ static int skip_to(const char *token, const char *atoken) {
 
 void init_include_path() {
   push_malloced_string(add_slash(current_file));  // does master has an include path?
-  svalue_t *ret = apply_master_ob(APPLY_GET_INCLUDE_PATH, 1);
+  svalue_t *ret = safe_apply_master_ob(APPLY_GET_INCLUDE_PATH, 1);
 
   if (!ret || ret == (svalue_t *)-1) {  // either no or no master yet
     return;                             // just use the runtime configuration
@@ -1019,7 +1024,7 @@ static void handle_include(char *name, int global) {
   } else if ((f = inc_open(buf, name, delim == '"')) != -1) {
     is = reinterpret_cast<incstate_t *>(
         DMALLOC(sizeof(incstate_t), TAG_COMPILER, "handle_include: 1"));
-    is->yyin_desc = yyin_desc;
+    is->stream = current_stream.release();
     is->line = current_line;
     is->file = current_file;
     is->file_id = current_file_id;
@@ -1034,7 +1039,7 @@ static void handle_include(char *name, int global) {
     current_line = 1;
     current_file = make_shared_string(buf);
     current_file_id = add_program_file(buf, 0);
-    yyin_desc = f;
+    current_stream = std::make_unique<FileLexStream>(f);
     refill_buffer();
   } else {
     sprintf(buf, "Cannot #include %s", name);
@@ -1658,7 +1663,7 @@ static void refill_buffer() {
         p = outp + size - 1;
       }
 
-      size = read(yyin_desc, p, MAXLINE);
+      size = current_stream->read(p, MAXLINE);
       cur_lbuf->buf_end = p += size;
       if (size < MAXLINE) {
         *(last_nl = p) = LEX_EOF;
@@ -1721,7 +1726,7 @@ static void refill_buffer() {
         flag = 1;
       }
 
-      size = read(yyin_desc, p, MAXLINE);
+      size = current_stream->read(p, MAXLINE);
       end = p += size;
       if (flag) {
         cur_lbuf->buf_end = p;
@@ -1826,7 +1831,7 @@ int yylex() {
           incstate_t *p;
 
           p = inctop;
-          close(yyin_desc);
+          current_stream->close();
           save_file_info(current_file_id, current_line - current_line_saved);
           current_line_saved = p->line - 1;
           /* add the lines from this file, and readjust to be relative
@@ -1846,7 +1851,8 @@ int yylex() {
           current_file_id = p->file_id;
           current_line = p->line;
 
-          yyin_desc = p->yyin_desc;
+          current_stream.reset(p->stream);
+          p->stream = nullptr;
           last_nl = p->last_nl;
           outp = p->outp;
           inctop = p->next;
@@ -2442,6 +2448,10 @@ int yylex() {
         if (c == 'X' || c == 'x') {
           yyp = yytext;
           return parseHexIntegerLiteral(c);
+        } 
+        if (c == 'B' || c == 'b') {
+          yyp = yytext;
+          return parseBinaryIntegerLiteral(c);           
         }
         outp--;
         c = '0';
@@ -2613,7 +2623,7 @@ int yylex() {
         goto badlex;
     }
   }
-badlex : {
+badlex: {
 #ifdef DEBUG
   char buff[100];
 
@@ -2624,6 +2634,37 @@ badlex : {
   return ' ';
 }
 }
+
+int parseBinaryIntegerLiteral(unsigned char c) {
+  char *yyp = yytext;
+  for (;;) {
+    c = *outp++;
+    if (c == '_') {
+      switch(*outp) {
+        case '0':
+        case '1': 
+          continue;
+        default:
+          break;
+      }
+    }
+    if (!(c == '0' || c == '1')) {
+        break;
+    }
+    SAVEC;
+  }
+  outp--;
+  *yyp = 0;
+
+  char *endptr;
+  yylval.number = strtol(reinterpret_cast<const char *>(yytext), &endptr, 2); 
+  if (endptr != yyp) {
+    yyerror("Invalid binary integer literal: %s", std::string(yytext, yyp - yytext).c_str());
+    return YYerror;
+  }
+  return L_NUMBER;
+}
+
 int parseHexIntegerLiteral(unsigned char c) {
   char *yyp = yytext;
   for (;;) {
@@ -3020,10 +3061,12 @@ void end_new_file() {
     incstate_t *p;
 
     p = inctop;
-    close(yyin_desc);
+    current_stream->close();
+    current_stream.reset();
     free_string(current_file);
     current_file = p->file;
-    yyin_desc = p->yyin_desc;
+    current_stream.reset(p->stream);
+    p->stream = nullptr;
     inctop = p->next;
     FREE((char *)p);
   }
@@ -3235,7 +3278,7 @@ void add_predefines() {
   }
 }
 
-void start_new_file(int f) {
+void start_new_file(std::unique_ptr<LexStream> stream) {
   if (defines_need_freed) {
     free_defines();
   }
@@ -3259,7 +3302,7 @@ void start_new_file(int f) {
     add_define("__DIR__", -1, dir);
     FREE(dir);
   }
-  yyin_desc = f;
+  current_stream = std::move(stream);
   lex_fatal = 0;
   last_function_context = -1;
   current_function_context = nullptr;
@@ -3321,9 +3364,12 @@ static void int_add_instr_name(const char *name, int n, short t) {
 static void init_instrs() {
   unsigned int i, n;
 
+  // operators
   for (i = 0; i < EFUN_BASE; i++) {
-    instrs[i].ret_type = -1;
+    instrs[i].name = operator_names[i];
+    instrs[i].ret_type = T_ANY;
   }
+
   for (i = 0; i < size_of_predefs; i++) {
     n = predefs[i].token;
     if (n & F_ALIAS_FLAG) {
@@ -3440,7 +3486,7 @@ static void init_instrs() {
   add_instr_name("parse_command", "c_parse_command(%i);\n", F_PARSE_COMMAND, T_NUMBER);
   add_instr_name("string", 0, F_STRING, T_STRING);
   add_instr_name("short_string", 0, F_SHORT_STRING, T_STRING);
-  add_instr_name("call", "c_call(%i, %i);\n", F_CALL_FUNCTION_BY_ADDRESS, T_ANY);
+  add_instr_name("F_CALL_FUNCTION_BY_ADDRESS", "c_call(%i, %i);\n", F_CALL_FUNCTION_BY_ADDRESS, T_ANY);
   add_instr_name("call_inherited", "c_call_inherited(%i, %i, %i);\n", F_CALL_INHERITED, T_ANY);
   add_instr_name("aggregate_assoc", "C_AGGREGATE_ASSOC(%i);\n", F_AGGREGATE_ASSOC, T_MAPPING);
 #ifdef DEBUG

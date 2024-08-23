@@ -2731,8 +2731,12 @@ void f_min() {
 #ifdef F_ABS
 
 void f_abs() {
-  if (sp->type == T_REAL && sp->u.real < 0.0) {
-    sp->u.real = -sp->u.real;
+  if (sp->type == T_REAL) {
+    if (sp->u.real < 0.0) {
+      sp->u.real = -sp->u.real;
+    } else if (sp->u.real == -0.0) {
+      sp->u.real = 0.0;
+    }
   } else if (sp->type == T_NUMBER && sp->u.number < 0) {
     sp->u.number = -sp->u.number;
   }
@@ -3035,6 +3039,7 @@ object_t *testloadob;
 static void fix_object_names() {
   if (testloadob) {
     SETOBNAME(testloadob, saved_extra_name);
+    ObjectTable::instance().insert(testloadob->obname,testloadob);
   }
 }
 
@@ -3043,6 +3048,7 @@ void f_test_load() {
   object_t *new_ob;
   if ((testloadob = find_object2(sp->u.string))) {
     tmp = testloadob->obname;
+    ObjectTable::instance().remove(testloadob->obname);
     SETOBNAME(testloadob, "");
   }
   saved_extra_name = tmp;
@@ -3066,6 +3072,7 @@ void f_test_load() {
   push_number(1);
   if (testloadob) {
     SETOBNAME(testloadob, saved_extra_name);
+    ObjectTable::instance().insert(testloadob->obname,testloadob);
   }
 }
 #endif

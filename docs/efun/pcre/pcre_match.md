@@ -1,7 +1,8 @@
 ---
-layout: default
+layout: doc
 title: pcre / pcre_match
 ---
+# pcre_match
 
 ### NAME
 
@@ -9,12 +10,12 @@ title: pcre / pcre_match
 
 ### SYNOPSIS
 
-    mixed pcre_match(string | string *, string, void | int);
+    mixed pcre_match(string|string *lines, string pattern, void|int flag);
 
 ### DESCRIPTION
 
-    analog with regexp efun for backwards compatibility reasons
-    but utilizing the PCRE library.
+    analog with regexp efun for backwards compatibility reasons but utilizing
+    the PCRE library.
 
 ### SEE ALSO
 

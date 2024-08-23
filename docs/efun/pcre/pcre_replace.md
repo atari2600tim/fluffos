@@ -1,7 +1,8 @@
 ---
-layout: default
+layout: doc
 title: pcre / pcre_replace
 ---
+# pcre_replace
 
 ### NAME
 
@@ -9,13 +10,13 @@ title: pcre / pcre_replace
 
 ### SYNOPSIS
 
-    string pcre_replace(string, string, string *);
+    string pcre_replace(string input, string pattern, string *replacments);
 
 ### DESCRIPTION
 
-    returns a string where all captured groups have been replaced by the elements
-    of the replacement array. Number of subgroups and the size of the replacement
-    array must match.
+    returns a string where all captured groups have been replaced by the
+    elements of the replacement array. Number of subgroups and the size of the
+    replacement array must match.
 
 ### SEE ALSO
 

@@ -1,7 +1,8 @@
 ---
-layout: default
+layout: doc
 title: filesystem / write_file
 ---
+# write_file
 
 ### NAME
 
@@ -19,5 +20,6 @@ title: filesystem / write_file
 
 ### SEE ALSO
 
-    read_file(3), write_buffer(3), file_size(3)
+    file_size(3), read_file(3), write_buffer(3), async_read(3), async_write(3),
+    valid_read(4), valid_write(4)
 

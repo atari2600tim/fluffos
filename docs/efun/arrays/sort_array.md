@@ -1,7 +1,8 @@
 ---
-layout: default
+layout: doc
 title: arrays / sort_array
 ---
+# sort_array
 
 ### NAME
 
@@ -34,5 +35,5 @@ title: arrays / sort_array
 
 ### SEE ALSO
 
-    filter_array(3), map_array(3), strcmp(3)
+    filter(3), map(3), strcmp(3)
 

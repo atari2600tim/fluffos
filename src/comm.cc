@@ -90,17 +90,8 @@ void on_user_command(evutil_socket_t fd, short what, void *arg) {
     return;
   }
 
-  // FIXME: this function currently calls into mudlib and will throw errors
-  // This catch block should be moved one level down.
-  error_context_t econ;
-  save_context(&econ);
   set_eval(max_eval_cost);
-  try {
-    process_user_command(user);
-  } catch (const char *) {
-    restore_context(&econ);
-  }
-  pop_context(&econ);
+  process_user_command(user);
 
   /* Has to be cleared if we jumped out of process_user_command() */
   current_interactive = nullptr;
@@ -197,7 +188,7 @@ void new_conn_handler(evconnlistener *listener, evutil_socket_t fd, struct socka
     }
   }
 
-  if (port->kind == PORT_WEBSOCKET) {
+  if (port->kind == PORT_TYPE_WEBSOCKET) {
     // For websocket connections, wait until they are handshake finished.
     init_user_websocket(port->lws_context, fd);
     return;
@@ -208,7 +199,7 @@ void new_conn_handler(evconnlistener *listener, evutil_socket_t fd, struct socka
     auto *user = new_user(port, fd, addr, addrlen);
     new_user_event_listener(base, user);
 
-    if (user->connection_type == PORT_TELNET) {
+    if (user->connection_type == PORT_TYPE_TELNET) {
       user->telnet = net_telnet_init(user);
       send_initial_telnet_negotiations(user);
     }
@@ -459,7 +450,7 @@ bool init_user_conn() {
       }
 
       // Websocket TLS is handled in init_websocket_context
-      if (!port.tls_cert.empty() && port.kind != PORT_WEBSOCKET) {
+      if (!port.tls_cert.empty() && port.kind != PORT_TYPE_WEBSOCKET) {
         SSL_CTX *ctx = tls_server_init(port.tls_cert, port.tls_key);
         if (!ctx) {
           debug_message("Unable to create TLS context.\n");
@@ -485,7 +476,7 @@ bool init_user_conn() {
     }
     port.ev_conn = conn;
     port.fd = fd;
-    if (port.kind == PORT_WEBSOCKET) {
+    if (port.kind == PORT_TYPE_WEBSOCKET) {
       port.lws_context = init_websocket_context(g_event_base, &port);
     }
   }
@@ -571,18 +562,18 @@ void add_message(object_t *who, const char *data, int len) {
 
   auto *ip = who->interactive;
   switch (ip->connection_type) {
-    case PORT_ASCII:
-    case PORT_TELNET: {
+    case PORT_TYPE_ASCII:
+    case PORT_TYPE_TELNET: {
       auto transdata = u8_convert_encoding(ip->trans, data, len);
       auto result = transdata.empty() ? std::string_view(data, len) : transdata;
       inet_volume += result.size();
-      if (ip->connection_type == PORT_TELNET) {
+      if (ip->connection_type == PORT_TYPE_TELNET) {
         telnet_send_text(ip->telnet, result.data(), result.size());
       } else {
         bufferevent_write(ip->ev_buffer, result.data(), result.size());
       }
     } break;
-    case PORT_WEBSOCKET: {
+    case PORT_TYPE_WEBSOCKET: {
       if (ip->iflags & HANDSHAKE_COMPLETE) {
         websocket_send_text(ip->lws, data, len);
       } else {
@@ -662,13 +653,15 @@ int flush_message(interactive_t *ip) {
       auto *output = bufferevent_get_output(ip->ev_buffer);
       auto len = evbuffer_get_length(output);
       if (len > 0) {
-        evbuffer_unfreeze(output, 1);
+        evbuffer_freeze(output, 1);
         auto *data = evbuffer_pullup(output, len);
         auto wrote = SSL_write(ssl, data, len);
+        // must left unfreezed
+        // https://github.com/libevent/libevent/issues/1469
+        evbuffer_unfreeze(output, 1);
         if (wrote > 0) {
           evbuffer_drain(output, wrote);
         }
-        evbuffer_freeze(output, 1);
         return wrote > 0;
       }
     } else {
@@ -708,10 +701,10 @@ void get_user_data(interactive_t *ip) {
 
   /* compute how much data we can read right now */
   switch (ip->connection_type) {
-    case PORT_WEBSOCKET:
+    case PORT_TYPE_WEBSOCKET:
       // Impossible, we don't handle it here.
       break;
-    case PORT_TELNET:
+    case PORT_TYPE_TELNET:
       text_space = sizeof(ip->text) - ip->text_end;
 
       /* check if we need more space */
@@ -730,7 +723,7 @@ void get_user_data(interactive_t *ip) {
       }
       break;
 
-    case PORT_MUD:
+    case PORT_TYPE_MUD:
       if (ip->text_end < 4) {
         text_space = 4 - ip->text_end;
       } else {
@@ -766,10 +759,10 @@ void get_user_data(interactive_t *ip) {
   /* process the data that we've just read */
 
   switch (ip->connection_type) {
-    case PORT_WEBSOCKET:
+    case PORT_TYPE_WEBSOCKET:
       // Impossible, we don't handle it here
       break;
-    case PORT_TELNET: {
+    case PORT_TYPE_TELNET: {
       int const start = ip->text_end;
 
       // this will read data into ip->text
@@ -793,7 +786,7 @@ void get_user_data(interactive_t *ip) {
       }
       break;
     }
-    case PORT_MUD:
+    case PORT_TYPE_MUD:
       memcpy(ip->text + ip->text_end, buf, num_bytes);
       ip->text_end += num_bytes;
 
@@ -820,7 +813,7 @@ void get_user_data(interactive_t *ip) {
       }
       break;
 
-    case PORT_ASCII: {
+    case PORT_TYPE_ASCII: {
       char *nl, *p;
 
       memcpy(ip->text + ip->text_end, buf, num_bytes);
@@ -854,7 +847,7 @@ void get_user_data(interactive_t *ip) {
       }
     } break;
 
-    case PORT_BINARY: {
+    case PORT_TYPE_BINARY: {
       buffer_t *buffer;
 
       buffer = allocate_buffer(num_bytes);
@@ -1090,7 +1083,7 @@ static void process_input(interactive_t *ip, char *user_command) {
   svalue_t *ret;
 
   if (!(ip->iflags & HAS_PROCESS_INPUT)) {
-    parse_command(user_command, command_giver);
+    safe_parse_command(user_command, command_giver);
     return;
   }
 
@@ -1100,13 +1093,13 @@ static void process_input(interactive_t *ip, char *user_command) {
    * programming languages.
    */
   copy_and_push_string(user_command);
-  ret = apply(APPLY_PROCESS_INPUT, command_giver, 1, ORIGIN_DRIVER);
+  ret = safe_apply(APPLY_PROCESS_INPUT, command_giver, 1, ORIGIN_DRIVER);
   if (!IP_VALID(ip, command_giver)) {
     return;
   }
   if (!ret) {
     ip->iflags &= ~HAS_PROCESS_INPUT;
-    parse_command(user_command, command_giver);
+    safe_parse_command(user_command, command_giver);
     return;
   }
 
@@ -1114,10 +1107,10 @@ static void process_input(interactive_t *ip, char *user_command) {
   if (ret->type == T_STRING) {
     auto *command = string_copy(ret->u.string, "current_command: " __CURRENT_FILE_LINE__);
     DEFER { FREE_MSTR(command); };
-    parse_command(command, command_giver);
+    safe_parse_command(command, command_giver);
   } else {
     if (ret->type != T_NUMBER || !ret->u.number) {
-      parse_command(user_command, command_giver);
+      safe_parse_command(user_command, command_giver);
     }
   }
 #endif
@@ -1393,9 +1386,13 @@ static int call_function_interactive(interactive_t *i, char *str) {
       sp->u.fp = funp = sent->function.f;
       funp->hdr.ref++;
     } else {
+      function = sent->function.s;
+      if (function && function[0] == APPLY___INIT_SPECIAL_CHAR) {
+        return 0;
+      }
       sp->type = T_STRING;
       sp->subtype = STRING_SHARED;
-      sp->u.string = function = sent->function.s;
+      sp->u.string = function;
       ref_string(function);
     }
 
@@ -1429,9 +1426,6 @@ static int call_function_interactive(interactive_t *i, char *str) {
     }
     /* current_object no longer set */
     if (function) {
-      if (function[0] == APPLY___INIT_SPECIAL_CHAR) {
-        error("Illegal function name.\n");
-      }
       (void)safe_apply(function, ob, num_arg + 1, ORIGIN_INTERNAL);
     } else {
       safe_call_function_pointer(funp, num_arg + 1);

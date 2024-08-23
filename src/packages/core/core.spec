@@ -103,6 +103,8 @@ mixed restore_variable(string);
 object* users();
 mixed *get_dir(string, int default: 0);
 int strsrch(string, string | int, int default: 0);
+void set_notify_destruct(int);
+int query_notify_destruct(object default: F__THIS_OBJECT);
 
 /* communication functions */
 
@@ -355,5 +357,10 @@ void trace_start(string, int default: 10);
 // stop to collect tracing data right away.
 void trace_end();
 
-// return highest resolution clock in nanoseconds
+// return highest resolution clock in platform dependent unit
 int perf_counter_ns();
+// Return nanosecond time
+int time_ns();
+
+mixed *sys_network_ports();
+void sys_reload_tls(int);

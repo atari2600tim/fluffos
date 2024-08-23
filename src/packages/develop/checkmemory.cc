@@ -26,6 +26,9 @@
 #ifdef PACKAGE_DB
 #include "packages/db/db.h"
 #endif
+#ifdef PACKAGE_ASYNC
+#include "packages/async/async.h"
+#endif
 
 #if (defined(DEBUGMALLOC) && defined(DEBUGMALLOC_EXTENSIONS))
 
@@ -197,6 +200,8 @@ static void mark_object(object_t *ob) {
     outbuf_addv(&out, "can't mark variables; %s is swapped.\n", ob->obname);
 }
 
+static void mark_funp(funptr_t *fp);
+
 void mark_svalue(svalue_t *sv) {
   switch (sv->type) {
     case T_OBJECT:
@@ -226,6 +231,7 @@ void mark_svalue(svalue_t *sv) {
           EXTRA_REF(BLOCK(sv->u.string))++;
           break;
       }
+      break;
   }
 }
 
@@ -460,10 +466,6 @@ void check_all_blocks(int flag) {
   block_t *ssbl;
   malloc_block_t *msbl;
   extern svalue_t apply_ret_value;
-
-#if 0
-  int num = 0, total = 0;
-#endif
 
   outbuf_zero(&out);
   if (!(flag & 2)) {
@@ -704,8 +706,11 @@ void check_all_blocks(int flag) {
 #ifdef PACKAGE_DB
     mark_db_conn();
 #endif
-
-    mark_svalue(&apply_ret_value);
+#ifdef PACKAGE_ASYNC
+    async_mark_request();
+#endif
+    free_svalue(&apply_ret_value, "checkmemory");
+    apply_ret_value = const0u;
 
     if (master_ob) {
       master_ob->extra_ref++;
@@ -903,10 +908,18 @@ void check_all_blocks(int flag) {
             }
             if (fp->hdr.ref != fp->hdr.extra_ref) {
               outbuf_addv(&out,
-                          "Bad ref count for function pointer (owned by %s), "
+                          "Bad ref count for function pointer %p (type %d, owned by %s), "
                           "is %d - should be %d\n",
+                          fp,
+                          fp->hdr.type,
                           (fp->hdr.owner ? fp->hdr.owner->obname : "(null)"), fp->hdr.ref,
                           fp->hdr.extra_ref);
+              switch(fp->hdr.type) {
+                case FP_FUNCTIONAL:
+                  outbuf_addv(&out, "fp offset %04x :\n", fp->f.functional.offset);
+                  dump_prog(fp->f.functional.prog, stdout, 1|2);
+              }
+              md_print_ref_journal(entry, &out);
             }
             break;
           case TAG_BUFFER:
@@ -979,6 +992,12 @@ void check_all_blocks(int flag) {
                           "Bad ref count for shared string \"%s\", is %d - "
                           "should be %d\n",
                           STRING(ssbl), REFS(ssbl), EXTRA_REF(ssbl));
+              std::stringstream ss;
+              stralloc_print_entry(ss, ssbl);
+              auto result = ss.str();
+
+              outbuf_add(&out, result.c_str());
+              md_print_ref_journal(entry, &out);
             }
             break;
           case TAG_ED:

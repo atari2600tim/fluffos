@@ -482,6 +482,18 @@ static int user_parser(char *buff) {
   return 0;
 }
 
+void safe_parse_command(char *str, object_t *ob) {
+  error_context_t econ;
+  save_context(&econ);
+
+  try {
+    parse_command(str, ob);
+  } catch (const char *) {
+    restore_context(&econ);
+  }
+  pop_context(&econ);
+}
+
 /*
  * Take a user command and parse it.
  * The command can also come from a NPC.

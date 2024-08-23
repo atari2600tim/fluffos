@@ -133,6 +133,7 @@ extern int st_num_arg;
 extern ref_t *global_ref_list;
 extern int lv_owner_type;
 extern refed_t *lv_owner;
+extern const char *lv_owner_str;
 
 void kill_ref(ref_t *);
 ref_t *make_ref(void);
@@ -161,7 +162,6 @@ svalue_t *safe_call_function_pointer(funptr_t *, int);
 void call___INIT(object_t *);
 array_t *call_all_other(array_t *, const char *, int);
 const char *function_exists(const char *, object_t *, int);
-void call_function(program_t *, int);
 void mark_apply_low_cache(void);
 void translate_absolute_line(int, unsigned short *, int *, int *);
 char *add_slash(const char *const);
@@ -223,5 +223,7 @@ inline const char *access_to_name(int mode) {
 
 void get_explicit_line_number_info(char *, const program_t *, const char **, int *);
 int last_instructions();
+
+void push_undefineds(int num);
 
 #endif /* _INTERPRET_H */

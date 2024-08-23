@@ -198,10 +198,10 @@ void f__call_other() {
     array_t *v = arg[1].u.arr;
     svalue_t *sv = nullptr;
 
-    check_for_destr(v);
     if (!((sv = v->item)->type == T_STRING)) {
       error("call_other: 1st elem of array for arg 2 must be a string\n");
     }
+    check_for_destr(v);
     funcname = sv->u.string;
     num_arg = 2 + merge_arg_lists(num_arg - 2, v, 1);
   }
@@ -1159,16 +1159,6 @@ void f_message() {
       break;
     case T_NUMBER: {
       int const len = SVALUE_STRLEN(args + 1);
-
-      /* this is really bad and probably should be rm'ed -Beek;
-       * on the other hand, we don't have a debug_message() efun yet.
-       * Well, there is one in contrib now ...
-       */
-      /* for compatibility (write() simul_efuns, etc)  -bobf */
-      if (len > LARGEST_PRINTABLE_STRING) {
-        error("Printable strings limited to length of %d.\n", LARGEST_PRINTABLE_STRING);
-      }
-
       add_message(command_giver, args[1].u.string, len);
       pop_n_elems(num_arg);
       return;
@@ -1750,11 +1740,6 @@ void f_receive() {
   if (sp->type == T_STRING) {
     if (current_object->interactive) {
       int const len = SVALUE_STRLEN(sp);
-
-      if (len > LARGEST_PRINTABLE_STRING) {
-        error("Printable strings limited to length of %d.\n", LARGEST_PRINTABLE_STRING);
-      }
-
       add_message(current_object, sp->u.string, len);
     }
     free_string_svalue(sp--);
@@ -2294,6 +2279,31 @@ void f_set_bit() {
     error("Illegal bit pattern in set_bit character %d\n", ind);
   }
   str[ind] = ((str[ind] - ' ') | (1 << bit)) + ' ';
+}
+#endif
+
+#ifdef F_SET_NOTIFY_DESTRUCT
+void f_set_notify_destruct() {
+  int const num = sp->u.number ;
+
+  if(num == 1) {
+    current_object->flags |= O_NOTIFY_DESTRUCT;
+  } else if(num == 0) {
+    current_object->flags &= ~O_NOTIFY_DESTRUCT;
+  } else {
+    error("Bad argument 1 to set_notify_destructing()\n");
+  }
+
+  pop_stack() ;
+}
+#endif
+
+#ifdef F_QUERY_NOTIFY_DESTRUCT
+void f_query_notify_destruct() {
+  object_t *ob = sp->u.ob;
+  int const num = ob->flags & O_NOTIFY_DESTRUCT ;
+  free_object(&sp->u.ob, "f_query_notify_destruct");
+  put_number(num ? 1 : 0) ;
 }
 #endif
 

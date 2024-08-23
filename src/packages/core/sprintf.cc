@@ -372,6 +372,10 @@ void svalue_to_string(svalue_t *obj, outbuffer_t *outbuf, int indent, int traili
       }
       break;
     case T_BUFFER:
+      if(!(obj->u.buf->size)) {
+        outbuf_add(outbuf, "BUFFER ( )");
+        break;
+      }
       outbuf_add(outbuf, "BUFFER ( /* sizeof() == ");
       outbuf_addv(outbuf, "%d", obj->u.buf->size);
       outbuf_add(outbuf, " */\n");
@@ -1293,25 +1297,19 @@ char *string_print_formatted(const char *format_str, int argc, svalue_t *argv) {
             default:
               SPRINTF_ERROR(ERR_BAD_INT_TYPE);
           }
-          if ((cheat[i - 1] == 'f' && carg->type != T_REAL) ||
+          if ((cheat[i - 1] == 'f' && carg->type == T_NUMBER)) {
+            // convert to T_REAL
+            LPC_FLOAT temp = carg->u.number;
+            carg->type = T_REAL;
+            carg->u.real = temp;
+          } else if ((cheat[i - 1] == 'd' && carg->type == T_REAL)) {
+            // convert to T_NUMBER
+            LPC_INT temp = floor(carg->u.real);
+            carg->type = T_NUMBER;
+            carg->u.number = temp;
+          } else if ((cheat[i - 1] == 'f' && carg->type != T_REAL) ||
               (cheat[i - 1] != 'f' && carg->type != T_NUMBER)) {
-#ifdef RETURN_ERROR_MESSAGES
-            sprintf(buff,
-                    "ERROR: (s)printf(): Incorrect argument type to %%%c. "
-                    "(arg: %u)\n",
-                    cheat[i - 1], sprintf_state->cur_arg);
-            debug_message("Program /%s File: %s: %s", current_prog->name, get_line_number_if_any(),
-                          buff);
-            debug_message("%s", buff);
-            if (current_object) {
-              debug_message("program: /%s, object: %s, file: %s\n",
-                            current_prog ? current_prog->name : "", current_object->name,
-                            get_line_number_if_any());
-            }
-            ERROR(ERR_RECOVERY_ONLY);
-#else
             error("ERROR: (s)printf(): Incorrect argument type to %%%c.\n", cheat[i - 1]);
-#endif /* RETURN_ERROR_MESSAGES */
           }
           cheat[i] = '\0';
 

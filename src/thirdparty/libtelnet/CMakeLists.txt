@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.22)
 project(libtelnet
     VERSION 0.30.0
     LANGUAGES C
@@ -35,9 +35,9 @@ if(${ZLIB_FOUND})
       target_link_libraries(libtelnet PRIVATE ${ZLIB_LIBRARIES})
 endif()
 
-add_subdirectory(util)
-add_subdirectory(doc)
-add_subdirectory(test)
+#add_subdirectory(util)
+#add_subdirectory(doc)
+#add_subdirectory(test)
 
 include(GNUInstallDirs)
 
