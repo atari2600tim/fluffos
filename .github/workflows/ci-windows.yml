@@ -47,3 +47,22 @@ jobs:
       - name: Testsuite
         run: |
           cd testsuite && ../build/bin/driver etc/config.test -ftest
+      - name: 'Prepare Lil Artifact'
+        run: |
+          mkdir lil
+          mkdir lil/src
+          cp build/bin/driver.exe lil
+          cp -r build/bin/www lil/src
+          cp -r testsuite lil
+          echo @echo off >> lil/startlil.bat
+          echo echo Game will be on port 4000, web client on http://localhost:4001 >> lil/startlil.bat
+          echo pause >> lil/startlil.bat
+          echo cd testsuite >> lil/startlil.bat
+          echo ..\\driver etc\\config.test >> lil/startlil.bat
+          echo echo Game has finished >> lil/startlil.bat
+          echo pause >> lil/startlil.bat
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v2
+        with:
+          name: lil
+          path: lil/
